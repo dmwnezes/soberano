@@ -58,6 +58,9 @@ object UpdateState {
         val r = runCatching { Updater.latest() }.getOrNull() ?: return
         if (!Updater.isNewer(r)) return
         available = r
+        // nos dados móveis só avisa; o download de ~12 MB espera o Wi-Fi ou o toque em "Baixar"
+        val cm = ctx.getSystemService(android.net.ConnectivityManager::class.java)
+        if (cm != null && cm.isActiveNetworkMetered) return
         downloaded = runCatching { Updater.download(ctx, r) {} }.getOrNull()
     }
 }

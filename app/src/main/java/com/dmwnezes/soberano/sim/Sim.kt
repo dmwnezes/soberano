@@ -18,9 +18,14 @@ class Sim(val world: WorldMap, val game: Game) {
     val ai = Ai(this)
     val events = Events(this)
     val dev = Development(this)
+    val civil = CivilWars(this)
+    val unitedNations = UnitedNations(this)
+    val news = News(this)
 
     init {
         LawMaker.register(game)
+        game.ensureArrays()
+        if (game.generalPool.isEmpty()) military.refreshGeneralPool()
         dev.ensureCabinet()
         // saves da versão 0.1 usavam outra paleta
         for (n in game.nations) {
@@ -112,6 +117,7 @@ class Sim(val world: WorldMap, val game: Game) {
     fun feed(icon: String, text: String, tone: Int = 0, province: Int = -1) {
         game.feed.add(0, FeedItem(game.day, icon, text, tone, province))
         if (game.feed.size > 120) game.feed.removeAt(game.feed.lastIndex)
+        news.collect(game.feed[0])
         listener?.invoke(game.feed[0])
     }
 
@@ -130,6 +136,7 @@ class Sim(val world: WorldMap, val game: Game) {
         val today = date()
 
         military.dailyProduction()
+        military.dailyForts()
         military.dailyMovement()
         military.dailyCombat()
         military.dailyAutoMerge()
@@ -150,9 +157,12 @@ class Sim(val world: WorldMap, val game: Game) {
         military.monthlyResistance()
         diplomacy.monthly()
         dev.monthly()
+        civil.monthly()
+        unitedNations.monthly()
         events.monthly()
         politics.checkEndConditions()
         game.invalidate()
+        news.publish()
     }
 
     // ------------------------------------------------------------- consultas para a interface

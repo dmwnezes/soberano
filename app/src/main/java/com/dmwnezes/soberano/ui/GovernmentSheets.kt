@@ -62,6 +62,7 @@ fun GovernmentSheet(c: GameController) {
 
 @Composable
 private fun GovOverview(c: GameController) {
+    @Suppress("UNUSED_EXPRESSION") c.tick // relê quando o jogo avança (evita pular a recomposição)
     val me = c.me
     val g = c.game
     SheetBody {
@@ -90,6 +91,7 @@ private fun GovOverview(c: GameController) {
                 }
             }
         }
+        CampaignPanel(c)
         Spacer(Modifier.height(10.dp))
         LineChart("Aprovação", g.history.map { it.approval }, "${me.approval.toInt()}%", Ink.good)
         SectionTitle("Povo")
@@ -109,6 +111,7 @@ private fun GovOverview(c: GameController) {
 
 @Composable
 private fun GovLaws(c: GameController) {
+    @Suppress("UNUSED_EXPRESSION") c.tick // relê quando o jogo avança (evita pular a recomposição)
     val me = c.me
     val g = c.game
     SheetBody {
@@ -153,6 +156,7 @@ private fun GovLaws(c: GameController) {
 
 @Composable
 private fun GovMinisters(c: GameController) {
+    @Suppress("UNUSED_EXPRESSION") c.tick // relê quando o jogo avança (evita pular a recomposição)
     val g = c.game
     val dev = c.sim.dev
     SheetBody {
@@ -206,6 +210,7 @@ private fun GovMinisters(c: GameController) {
 
 @Composable
 private fun GovRegime(c: GameController) {
+    @Suppress("UNUSED_EXPRESSION") c.tick // relê quando o jogo avança (evita pular a recomposição)
     val me = c.me
     SheetBody {
         Spacer(Modifier.height(6.dp))
@@ -254,6 +259,7 @@ fun EconomySheet(c: GameController) {
 
 @Composable
 private fun EconBudget(c: GameController) {
+    @Suppress("UNUSED_EXPRESSION") c.tick // relê quando o jogo avança (evita pular a recomposição)
     val me = c.me
     val g = c.game
     val b = c.sim.economy.budget(me)
@@ -321,6 +327,7 @@ private fun EconBudget(c: GameController) {
 
 @Composable
 private fun EconResources(c: GameController) {
+    @Suppress("UNUSED_EXPRESSION") c.tick // relê quando o jogo avança (evita pular a recomposição)
     val me = c.me
     val dev = c.sim.dev
     val g = c.game
@@ -361,6 +368,7 @@ private fun EconResources(c: GameController) {
 
 @Composable
 private fun EconProjects(c: GameController) {
+    @Suppress("UNUSED_EXPRESSION") c.tick // relê quando o jogo avança (evita pular a recomposição)
     val me = c.me
     val dev = c.sim.dev
     SheetBody {
@@ -420,6 +428,7 @@ private fun EconProjects(c: GameController) {
 
 @Composable
 private fun EconHistory(c: GameController) {
+    @Suppress("UNUSED_EXPRESSION") c.tick // relê quando o jogo avança (evita pular a recomposição)
     val h = c.game.history
     val me = c.me
     SheetBody {

@@ -78,13 +78,19 @@ fun GameScreen(
     /** país contra o qual o jogador quer declarar guerra para atacar (-1 = nenhum) */
     var warTarget by remember { mutableStateOf(-1) }
 
-    // relógio do jogo
+    val ctx = androidx.compose.ui.platform.LocalContext.current
+    remember(c) { c.feedback = Feedback(ctx); 0 }
+
+    // relógio do jogo; o mapa anima a no máximo ~30 quadros por segundo (bateria)
     LaunchedEffect(c) {
         var last = 0L
+        var lastDraw = 0L
         while (true) withFrameNanos { t ->
             if (last != 0L) c.onFrame((t - last) / 1e9, System.currentTimeMillis())
             last = t
-            if (!c.paused || c.game.battles.isNotEmpty() || c.toasts.isNotEmpty() || c.game.armies.any { it.owner == c.game.player && it.moving }) frame++
+            val animating = !c.paused || c.game.battles.isNotEmpty() || c.orderTarget >= 0 ||
+                c.game.armies.any { it.owner == c.game.player && it.moving }
+            if (animating && t - lastDraw >= 33_000_000L) { frame++; lastDraw = t }
         }
     }
     LaunchedEffect(c.focusRequest) {
@@ -117,7 +123,7 @@ fun GameScreen(
             outlineNation = game.player,
             highlightNation = c.focusNation.takeIf { c.tab == Tab.DIPLOMACY } ?: (if (c.selProvince >= 0) game.owner[c.selProvince] else -1),
             selectedProvince = if (c.orderTarget >= 0) c.orderTarget else c.selProvince,
-            frame = frame + c.tick,
+            frame = { frame + c.tick },
             initialCenter = c.me.capital,
             onTapProvince = { p ->
                 if (nukeTargeting) {
@@ -147,7 +153,15 @@ fun GameScreen(
             TopBar(c)
             Toasts(c)
             Spacer(Modifier.weight(1f))
-            MapModeButton(c)
+            Row(Modifier.fillMaxWidth().padding(horizontal = 12.dp), verticalAlignment = Alignment.Bottom) {
+                MapLegend(c, Modifier.padding(bottom = 8.dp))
+                Spacer(Modifier.weight(1f))
+                Column(horizontalAlignment = Alignment.End) {
+                    MapShortcuts(c) { fitNation(c.sim, camera, game.player, c.me.capital) }
+                    Spacer(Modifier.height(8.dp))
+                    MapModeButton(c)
+                }
+            }
             Box(Modifier.fillMaxWidth()) {
                 androidx.compose.animation.AnimatedVisibility(c.tab == null && selArmy != null && c.orderTarget < 0, enter = fadeIn() + slideInVertically { it / 2 }, exit = fadeOut()) {
                     selArmy?.let { ArmyCard(c, it) }
@@ -160,6 +174,7 @@ fun GameScreen(
                 }
             }
             if (c.tab == null && game.proposals.isNotEmpty() && c.selArmy < 0 && c.selProvince < 0) ProposalBanner(c)
+            if (c.tab == null && c.selArmy < 0 && c.selProvince < 0) NewspaperPill(c, Modifier.padding(start = 12.dp, bottom = 6.dp))
             Dock(c)
         }
 
@@ -195,6 +210,16 @@ fun GameScreen(
         game.events.firstOrNull()?.let { EventCard(c, it) }
 
         if (confirmNuke >= 0) NukeConfirm(c, confirmNuke) { confirmNuke = -1 }
+
+        // votação da ONU e resultado de eleição (depois dos eventos)
+        if (game.events.isEmpty()) {
+            if (game.un.pending != null) UnVoteCard(c)
+            else ElectionCard(c)
+        }
+        if (c.showPaper) NewspaperOverlay(c)
+        if (c.showSearch) ProvinceSearch(c) { p ->
+            c.showSearch = false; c.focusRequest = p; c.selectProvince(p)
+        }
 
         if (warTarget >= 0) {
             val enemy = c.sim.nation(warTarget)
@@ -299,6 +324,7 @@ private fun TopBar(c: GameController) {
 
 @Composable
 private fun SpeedControl(c: GameController) {
+    @Suppress("UNUSED_EXPRESSION") c.tick // relê quando o jogo avança (evita pular a recomposição)
     Row(Modifier.clip(Shapes.chip).background(Ink.panel).padding(4.dp), verticalAlignment = Alignment.CenterVertically) {
         Box(
             Modifier.size(34.dp).clip(CircleShape).background(if (c.paused) Ink.brass else Ink.raised).clickable { c.togglePause() },
@@ -322,6 +348,7 @@ private fun SpeedControl(c: GameController) {
 
 @Composable
 private fun Toasts(c: GameController) {
+    @Suppress("UNUSED_EXPRESSION") c.tick // relê quando o jogo avança (evita pular a recomposição)
     Column(Modifier.fillMaxWidth().padding(horizontal = 12.dp), horizontalAlignment = Alignment.End) {
         for (t in c.toasts.take(3)) {
             Row(
@@ -340,8 +367,9 @@ private fun Toasts(c: GameController) {
 
 @Composable
 private fun MapModeButton(c: GameController) {
+    @Suppress("UNUSED_EXPRESSION") c.tick // relê quando o jogo avança (evita pular a recomposição)
     var open by remember { mutableStateOf(false) }
-    Column(Modifier.fillMaxWidth().padding(end = 12.dp, bottom = 8.dp), horizontalAlignment = Alignment.End) {
+    Column(Modifier.padding(bottom = 8.dp), horizontalAlignment = Alignment.End) {
         if (open) {
             Column(Modifier.clip(Shapes.card).background(Ink.panel).padding(6.dp)) {
                 for (m in MapMode.entries) {
@@ -364,6 +392,7 @@ private fun MapModeButton(c: GameController) {
 
 @Composable
 fun Dock(c: GameController, inSheet: Boolean = false) {
+    @Suppress("UNUSED_EXPRESSION") c.tick // relê quando o jogo avança (evita pular a recomposição)
     val icons = mapOf(
         Tab.GOVERNMENT to Icons.Rounded.AccountBalance,
         Tab.ECONOMY to Icons.Rounded.Payments,
@@ -404,6 +433,7 @@ fun Dock(c: GameController, inSheet: Boolean = false) {
 
 @Composable
 private fun SheetHeader(c: GameController) {
+    @Suppress("UNUSED_EXPRESSION") c.tick // relê quando o jogo avança (evita pular a recomposição)
     Column(Modifier.fillMaxWidth().clickable { c.tab = null }.padding(top = 8.dp, bottom = 2.dp), horizontalAlignment = Alignment.CenterHorizontally) {
         Box(Modifier.size(width = 40.dp, height = 4.dp).clip(Shapes.chip).background(Ink.line))
     }
@@ -473,6 +503,7 @@ private fun ProvinceCard(c: GameController, p: Int) {
                 for ((r, v) in res) StatPill(GameIcons.of(r.icon), "${r.label} ${Fmt.money(v.toDouble()).removePrefix("US$ ")}", Ink.text)
             }
         }
+        FortRow(c, p)
         if (g.owner[p] == me && ctrl == me) {
             val isRally = g.rallyPoint == p
             Text(if (isRally) "Ponto de reunião dos reservistas" else "Tornar ponto de reunião dos reservistas",
@@ -537,6 +568,7 @@ private fun ArmyCard(c: GameController, a: Army) {
             Spacer(Modifier.width(8.dp))
             Text("${(a.morale * 100).toInt()}%", style = Type.number.copy(fontSize = 14.sp), color = Ink.text)
         }
+        GeneralRow(c, a)
         if (mine) {
             Spacer(Modifier.height(10.dp))
             Text(
@@ -623,6 +655,29 @@ private fun OrderCard(c: GameController, a: Army, p: Int, onDeclare: (Int) -> Un
         }
         Spacer(Modifier.height(8.dp))
         Text(if (noRoute) "Sem caminho até lá" else "Chega em ${c.previewDays} dias", style = Type.small, color = if (noRoute) Ink.coral else Ink.muted)
+        // desembarque numa praia escolhida
+        val sea = remember(a.id, p, c.tick) { if (a.domain == Domain.LAND && pr.coastal && !neutral) sim.military.previewSea(a, p) else null }
+        if (sea != null) {
+            val cap = sim.military.transportCapacity(g.player)
+            val ok = cap >= a.divisions()
+            Row(
+                Modifier.fillMaxWidth().padding(top = 8.dp).clip(Shapes.tile).background(Ink.oceanDeep)
+                    .clickable(enabled = ok) {
+                        val why = sim.military.orderBySea(a, p)
+                        if (why != null) c.say(why, 2) else c.say("${a.name} vai desembarcar em ${pr.name}", 0, "ship")
+                        c.clearTarget()
+                    }.padding(10.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Icon(Icons.Rounded.DirectionsBoat, null, tint = if (ok) Ink.verdigris else Ink.faint, modifier = Modifier.size(20.dp))
+                Spacer(Modifier.width(10.dp))
+                Column(Modifier.weight(1f)) {
+                    Text("Desembarcar pelo mar", style = Type.label.copy(fontWeight = FontWeight.SemiBold), color = if (ok) Ink.text else Ink.faint)
+                    Text(if (ok) "${sea.second} dias, saindo de ${sim.world.provinces[if (sea.first.size > 1) sea.first[sea.first.size - 2] else a.province].name}"
+                        else "Precisa de transportes para ${a.divisions().toInt()} divisões (tem para ${cap.toInt()})", style = Type.small, color = Ink.muted)
+                }
+            }
+        }
         Spacer(Modifier.height(12.dp))
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             Btn("Cancelar", Modifier.weight(1f), BtnKind.GHOST) { c.clearTarget() }
@@ -643,6 +698,7 @@ private fun OrderCard(c: GameController, a: Army, p: Int, onDeclare: (Int) -> Un
 
 @Composable
 private fun ProposalBanner(c: GameController) {
+    @Suppress("UNUSED_EXPRESSION") c.tick // relê quando o jogo avança (evita pular a recomposição)
     val p = c.game.proposals.first()
     val from = c.sim.nation(p.from)
     val demand = p.kind == "DEMAND"
@@ -669,6 +725,7 @@ private fun ProposalBanner(c: GameController) {
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun EventCard(c: GameController, pe: PendingEvent) {
+    @Suppress("UNUSED_EXPRESSION") c.tick // relê quando o jogo avança (evita pular a recomposição)
     val def = Content.eventById[pe.def] ?: return
     Overlay({}, dismissable = false) {
         Row(verticalAlignment = Alignment.CenterVertically) {
@@ -706,6 +763,7 @@ private fun EventCard(c: GameController, pe: PendingEvent) {
 
 @Composable
 private fun NukeConfirm(c: GameController, p: Int, onClose: () -> Unit) {
+    @Suppress("UNUSED_EXPRESSION") c.tick // relê quando o jogo avança (evita pular a recomposição)
     var stage by remember { mutableStateOf(0) }
     val target = c.sim.nation(c.game.controller[p])
     Overlay(onClose) {
@@ -727,6 +785,7 @@ private fun NukeConfirm(c: GameController, p: Int, onClose: () -> Unit) {
 
 @Composable
 private fun SettingsOverlay(c: GameController, store: SaveStore, onExit: () -> Unit, onLoad: (String) -> Unit) {
+    @Suppress("UNUSED_EXPRESSION") c.tick // relê quando o jogo avança (evita pular a recomposição)
     var slots by remember { mutableStateOf<Boolean?>(null) }
     var rules by remember { mutableStateOf(false) }
     var update by remember { mutableStateOf(false) }
@@ -742,6 +801,12 @@ private fun SettingsOverlay(c: GameController, store: SaveStore, onExit: () -> U
         Btn("Regras da partida", Modifier.fillMaxWidth(), icon = Icons.Rounded.Tune) { rules = true }
         Spacer(Modifier.height(8.dp))
         Btn("Buscar atualização", Modifier.fillMaxWidth(), icon = Icons.Rounded.SystemUpdate) { update = true }
+        if (c.game.paper != null) {
+            Spacer(Modifier.height(8.dp))
+            Btn("Ler o último jornal", Modifier.fillMaxWidth(), icon = Icons.Rounded.Newspaper) { c.showSettings = false; c.showPaper = true }
+        }
+        Spacer(Modifier.height(4.dp))
+        SoundToggles(c)
         Spacer(Modifier.height(8.dp))
         Btn("Sair para o menu", Modifier.fillMaxWidth(), BtnKind.GHOST, Icons.Rounded.Logout) { c.showSettings = false; onExit() }
     }

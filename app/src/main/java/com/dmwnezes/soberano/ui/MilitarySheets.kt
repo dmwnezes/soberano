@@ -64,6 +64,7 @@ fun MilitarySheet(c: GameController, onNuke: () -> Unit) {
 
 @Composable
 private fun MilTroops(c: GameController) {
+    @Suppress("UNUSED_EXPRESSION") c.tick // relê quando o jogo avança (evita pular a recomposição)
     val me = c.me
     val g = c.game
     val sim = c.sim
@@ -107,7 +108,7 @@ private fun MilTroops(c: GameController) {
                     Icon(GameIcons.domain(a.domain), null, tint = if (a.battle) Ink.coral else Ink.brass, modifier = Modifier.size(20.dp))
                     Spacer(Modifier.width(12.dp))
                     Column(Modifier.weight(1f)) {
-                        Text(a.name, style = Type.body, color = Ink.text)
+                        Text(a.name + (a.general?.let { " · ${it.name.removePrefix("Gen. ")} (nív. ${it.level})" } ?: ""), style = Type.body, color = Ink.text, maxLines = 1, overflow = TextOverflow.Ellipsis)
                         Text(sim.world.provinces[a.province].name + when {
                             a.battle -> ", em combate"
                             a.moving -> " → ${sim.world.provinces[a.path.last()].name}"
@@ -129,6 +130,7 @@ private fun MilTroops(c: GameController) {
 /** Divide as divisões paradas igualmente entre as províncias (todas ou só a fronteira). */
 @Composable
 private fun SpreadDialog(c: GameController, onClose: () -> Unit) {
+    @Suppress("UNUSED_EXPRESSION") c.tick // relê quando o jogo avança (evita pular a recomposição)
     val g = c.game
     val sim = c.sim
     val me = g.player
@@ -174,6 +176,7 @@ private fun SpreadDialog(c: GameController, onClose: () -> Unit) {
 /** Escolhe onde reunir todas as tropas terrestres paradas. */
 @Composable
 private fun GatherDialog(c: GameController, onClose: () -> Unit) {
+    @Suppress("UNUSED_EXPRESSION") c.tick // relê quando o jogo avança (evita pular a recomposição)
     val g = c.game
     val sim = c.sim
     val me = g.player
@@ -204,6 +207,7 @@ private fun GatherDialog(c: GameController, onClose: () -> Unit) {
 
 @Composable
 private fun MilRecruit(c: GameController) {
+    @Suppress("UNUSED_EXPRESSION") c.tick // relê quando o jogo avança (evita pular a recomposição)
     val me = c.me
     val g = c.game
     val sim = c.sim
@@ -277,6 +281,7 @@ private fun MilRecruit(c: GameController) {
 
 @Composable
 private fun MilAuto(c: GameController) {
+    @Suppress("UNUSED_EXPRESSION") c.tick // relê quando o jogo avança (evita pular a recomposição)
     val me = c.me
     val g = c.game
     val sim = c.sim
@@ -324,6 +329,7 @@ private fun MilAuto(c: GameController) {
 
 @Composable
 private fun TargetRow(c: GameController, n: Nation?, selected: Boolean) {
+    @Suppress("UNUSED_EXPRESSION") c.tick // relê quando o jogo avança (evita pular a recomposição)
     Row(
         Modifier.fillMaxWidth().padding(vertical = 3.dp).clip(Shapes.tile).background(if (selected) Ink.brass.copy(alpha = 0.14f) else Ink.raised)
             .clickable { c.game.autoTarget = n?.id ?: -1; c.refresh() }.padding(12.dp),
@@ -340,6 +346,7 @@ private fun TargetRow(c: GameController, n: Nation?, selected: Boolean) {
 
 @Composable
 private fun MilTech(c: GameController, onNuke: () -> Unit) {
+    @Suppress("UNUSED_EXPRESSION") c.tick // relê quando o jogo avança (evita pular a recomposição)
     val me = c.me
     val g = c.game
     val sim = c.sim
@@ -405,12 +412,13 @@ fun WorldSheet(c: GameController) {
     val tab = c.subTab[Tab.WORLD] ?: (if (g.proposals.isNotEmpty()) 0 else 1)
     Column(Modifier.fillMaxSize()) {
         SheetHeaderTabs("Mundo", "${g.nations.count { it.alive }} países, ${g.wars.size} guerras",
-            listOf("Propostas" + if (g.proposals.isNotEmpty()) " (${g.proposals.size})" else "", "Guerras", "Ranking", "Avisos"), tab) { c.subTab[Tab.WORLD] = it }
+            listOf("Propostas" + if (g.proposals.isNotEmpty()) " (${g.proposals.size})" else "", "Guerras", "ONU", "Ranking", "Avisos"), tab) { c.subTab[Tab.WORLD] = it }
         Box(Modifier.weight(1f)) {
             when (tab) {
                 0 -> WorldProposals(c)
                 1 -> WorldWars(c)
-                2 -> WorldRanking(c)
+                2 -> WorldUn(c)
+                3 -> WorldRanking(c)
                 else -> WorldFeed(c)
             }
         }
@@ -419,6 +427,7 @@ fun WorldSheet(c: GameController) {
 
 @Composable
 private fun WorldProposals(c: GameController) {
+    @Suppress("UNUSED_EXPRESSION") c.tick // relê quando o jogo avança (evita pular a recomposição)
     val g = c.game
     SheetBody {
         Spacer(Modifier.height(8.dp))
@@ -429,6 +438,7 @@ private fun WorldProposals(c: GameController) {
 
 @Composable
 private fun WorldWars(c: GameController) {
+    @Suppress("UNUSED_EXPRESSION") c.tick // relê quando o jogo avança (evita pular a recomposição)
     val g = c.game
     val sim = c.sim
     SheetBody {
@@ -460,6 +470,7 @@ private fun WorldWars(c: GameController) {
 
 @Composable
 private fun WorldRanking(c: GameController) {
+    @Suppress("UNUSED_EXPRESSION") c.tick // relê quando o jogo avança (evita pular a recomposição)
     val g = c.game
     val sim = c.sim
     var rank by remember { mutableIntStateOf(0) }
@@ -482,6 +493,7 @@ private fun WorldRanking(c: GameController) {
 
 @Composable
 private fun WorldFeed(c: GameController) {
+    @Suppress("UNUSED_EXPRESSION") c.tick // relê quando o jogo avança (evita pular a recomposição)
     val g = c.game
     SheetBody {
         Spacer(Modifier.height(8.dp))
@@ -502,6 +514,7 @@ private fun WorldFeed(c: GameController) {
 
 @Composable
 private fun RankRow(c: GameController, pos: Int, n: Nation, kind: Int) {
+    @Suppress("UNUSED_EXPRESSION") c.tick // relê quando o jogo avança (evita pular a recomposição)
     val me = n.id == c.game.player
     Row(
         Modifier.fillMaxWidth().clip(Shapes.small).background(if (me) Ink.brass.copy(alpha = 0.13f) else Color.Transparent)

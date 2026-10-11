@@ -73,15 +73,33 @@ class GameController(val sim: Sim, private val store: SaveStore, private val sco
     val game get() = sim.game
     val me get() = sim.player
 
+    /** Sons e vibração (definido pela tela, que tem o Context). */
+    var feedback: Feedback? = null
+    private var hadEvent = false
+    private var hadVote = false
+    private var lastTickMs = 0L
+    /** dia do último jornal já aberto */
+    var paperSeenDay by mutableIntStateOf(-1)
+    var showPaper by mutableStateOf(false)
+    var showSearch by mutableStateOf(false)
+
     fun refresh() { tick++ }
 
     private val dayLength = doubleArrayOf(2.0, 1.0, 0.5, 0.2, 0.07)
 
-    val blocked get() = game.events.isNotEmpty() || game.gameOver != null
+    val blocked get() = game.events.isNotEmpty() || game.gameOver != null || game.un.pending != null ||
+        (game.election?.seen == false)
 
     fun onFrame(dtSec: Double, nowMs: Long) {
         // avisos expiram
         if (toasts.isNotEmpty()) toasts.removeAll { nowMs - it.born > 3800 }
+        // sons dos cartões que aparecem
+        val ev = game.events.isNotEmpty()
+        if (ev && !hadEvent) feedback?.play(Sfx.EVENT)
+        hadEvent = ev
+        val vote = game.un.pending != null
+        if (vote && !hadVote) feedback?.play(Sfx.VOTE)
+        hadVote = vote
         if (paused || blocked) { acc = 0.0; return }
         acc += dtSec.coerceAtMost(0.25)
         val len = dayLength[(speed - 1).coerceIn(0, 4)]
@@ -94,8 +112,9 @@ class GameController(val sim: Sim, private val store: SaveStore, private val sco
             // salva a cada três meses (gravar a cada mês travava a tela em velocidade alta)
             if (m != lastMonth) { lastMonth = m; if (m % 3 == 1) autosave() }
         }
-        if (days > 0) tick++
-        if (game.events.isNotEmpty() || game.gameOver != null) paused = true
+        // redesenha a interface no máximo ~10 vezes por segundo (economiza bateria em velocidade alta)
+        if (days > 0 && nowMs - lastTickMs >= 100) { tick++; lastTickMs = nowMs }
+        if (blocked) { paused = true; tick++ }
     }
 
     fun togglePause() { paused = !paused; tick++ }
@@ -109,6 +128,19 @@ class GameController(val sim: Sim, private val store: SaveStore, private val sco
 
     private fun onFeed(f: FeedItem) {
         if (f.tone >= 1 || f.province >= 0 && game.owner.getOrNull(f.province) == game.player) say(f.text, f.tone, f.icon, f.province)
+        val fx = when {
+            f.icon == "nuke" && f.tone >= 2 -> Sfx.NUKE
+            f.icon == "war" && f.tone >= 3 -> Sfx.WAR
+            f.icon == "protest" && f.tone >= 3 -> Sfx.WAR
+            f.icon == "battle" && f.tone >= 2 -> Sfx.BATTLE
+            f.icon == "victory" && f.tone == 1 -> Sfx.VICTORY
+            f.icon == "defeat" && f.tone >= 2 -> Sfx.DEFEAT
+            f.icon == "flag" && f.tone == 1 -> Sfx.CAPTURE
+            f.icon == "flag" && f.tone >= 3 -> Sfx.DEFEAT
+            f.icon == "factory" && f.tone == 1 -> Sfx.BUILD
+            else -> null
+        }
+        if (fx != null) feedback?.play(fx)
     }
 
     /** Executa uma ação do jogador; mostra o motivo se ela for recusada. */

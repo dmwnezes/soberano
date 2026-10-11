@@ -311,6 +311,7 @@ fun RulesEditor(settings: Settings, inGame: Boolean = false) {
     SectionTitle("Política")
     ToggleRow("Eleições", settings.elections, Icons.Rounded.HowToVote, "Desligado: você governa sem prazo") { settings.elections = it; bump() }
     ToggleRow("Armas nucleares", settings.nuclear, Icons.Rounded.FlashOn) { settings.nuclear = it; bump() }
+    ToggleRow("Guerra civil e separatismo", settings.civilWar, Icons.Rounded.CallSplit, "Regiões revoltadas viram países novos") { settings.civilWar = it; bump() }
     SectionTitle("Eventos")
     FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
         for (c in EventCategory.entries) {

@@ -89,8 +89,125 @@ class Development(private val sim: Sim) {
 
     fun consumption(n: Int, r: Resource): Float = (game.natGdp(n) * intensity[r.ordinal]).toFloat()
 
-    /** Saldo anual de comércio de um recurso, em US$ bi ao preço atual (positivo = exporta). */
-    fun balance(n: Int, r: Resource): Float = (production(n, r) - consumption(n, r)) * game.prices[r.ordinal]
+    /** Saldo anual de comércio de um recurso, em US$ bi ao preço atual (positivo = exporta). Contratos já contam. */
+    fun balance(n: Int, r: Resource): Float = (production(n, r) - consumption(n, r) - contracted(n, r)) * game.prices[r.ordinal]
+
+    /** Quanto [n] vende (positivo) ou compra (negativo) por contrato, por ano. */
+    fun contracted(n: Int, r: Resource): Float {
+        var s = 0f
+        for (d in game.deals) if (d.resource == r) { if (d.seller == n) s += d.amount; if (d.buyer == n) s -= d.amount }
+        return s
+    }
+
+    /** Sobra exportável de [n] em [r] (sem contar contratos já fechados). */
+    fun surplus(n: Int, r: Resource): Float = production(n, r) - consumption(n, r) - contracted(n, r)
+
+    // ============================================================ venda de recursos e armas
+
+    val dealYears = 2
+    /** Preço do contrato: 15% acima do mercado, garantido. */
+    val dealPremium = 1.15f
+
+    fun dealRefusal(seller: Int, buyer: Int, r: Resource, amount: Float): String? {
+        if (seller == buyer) return "Mesmo país"
+        if (sim.atWar(seller, buyer)) return "Estão em guerra"
+        if (game.treaties.any { it.type == TreatyType.EMBARGO && ((it.a == seller && it.b == buyer) || (it.a == buyer && it.b == seller)) }) return "Há embargo entre vocês"
+        if (amount <= 0f) return "Quantidade inválida"
+        if (surplus(seller, r) < amount) return "Sobra de ${r.label.lowercase()} insuficiente"
+        val need = -surplus(buyer, r)
+        if (need < amount * 0.5f) return "Eles não precisam de tanto ${r.label.lowercase()}"
+        if (game.rel(seller, buyer) < 0f) return "Relação precisa ser positiva"
+        val yearly = amount * game.prices[r.ordinal] * dealPremium
+        if (sim.nation(buyer).treasury < yearly / 12 * 3) return "Eles não têm caixa para pagar"
+        return null
+    }
+
+    fun sellResource(seller: Int, buyer: Int, r: Resource, amount: Float): String? {
+        dealRefusal(seller, buyer, r, amount)?.let { return it }
+        game.deals += ResourceDeal(seller, buyer, r, amount, game.day, game.day + 365 * dealYears)
+        game.addRel(seller, buyer, 6f)
+        if (sim.involvesPlayer(seller, buyer)) sim.feed(r.icon, "Contrato: ${sim.nation(seller).name} vende ${r.label.lowercase()} para ${sim.nation(buyer).name}", 1)
+        sim.touch()
+        return null
+    }
+
+    /** Pagamentos mensais dos contratos. */
+    private fun monthlyDeals() {
+        game.deals.removeAll { d -> d.until < game.day || !sim.nation(d.seller).alive || !sim.nation(d.buyer).alive || sim.atWar(d.seller, d.buyer) }
+        for (d in game.deals) {
+            val value = d.amount * game.prices[d.resource.ordinal] * dealPremium / 12.0
+            val buyer = sim.nation(d.buyer); val seller = sim.nation(d.seller)
+            seller.treasury += value * 0.5
+            buyer.treasury -= value * 0.5
+            if (buyer.treasury < 0) { buyer.debt -= buyer.treasury; buyer.treasury = 0.0 }
+        }
+    }
+
+    fun armsPrice(t: UnitType, qty: Int) = t.cost * qty * 1.2
+
+    /** Unidades de [t] que [n] pode vender (em tropas paradas e fora de combate). */
+    fun armsAvailable(n: Int, t: UnitType): Int =
+        game.armies.filter { it.owner == n && !it.battle && !it.moving }.sumOf { it.units[t.ordinal].toDouble() }.toInt()
+
+    fun armsRefusal(seller: Int, buyer: Int, t: UnitType, qty: Int): String? {
+        if (sim.atWar(seller, buyer)) return "Estão em guerra"
+        if (game.rel(seller, buyer) < 10f) return "Relação precisa chegar a 10"
+        if (armsAvailable(seller, t) < qty) return "Você não tem $qty ${t.label.lowercase()} paradas"
+        if (sim.nation(buyer).treasury < armsPrice(t, qty)) return "Eles não têm ${Fmt.money(armsPrice(t, qty))}"
+        if (t.domain == Domain.SEA && sim.provincesOf(buyer).none { world.provinces[it].coastal }) return "Eles não têm litoral"
+        return null
+    }
+
+    fun sellArms(seller: Int, buyer: Int, t: UnitType, qty: Int): String? {
+        armsRefusal(seller, buyer, t, qty)?.let { return it }
+        var left = qty.toFloat()
+        for (a in game.armies.filter { it.owner == seller && !it.battle && !it.moving }.sortedByDescending { it.units[t.ordinal] }) {
+            if (left <= 0f) break
+            val take = min(left, kotlin.math.floor(a.units[t.ordinal]))
+            a.units[t.ordinal] -= take; left -= take
+        }
+        game.armies.removeAll { !it.alive() }
+        val b = sim.nation(buyer)
+        val price = armsPrice(t, qty)
+        b.treasury -= price
+        sim.nation(seller).treasury += price
+        val spot = if (t.domain == Domain.SEA) sim.provincesOf(buyer).filter { world.provinces[it].coastal && game.controller[it] == buyer }.maxByOrNull { game.provPop[it] }
+            else b.capital.takeIf { game.controller[it] == buyer } ?: sim.provincesOf(buyer).firstOrNull { game.controller[it] == buyer }
+        if (spot != null) {
+            val army = game.armies.firstOrNull { it.owner == buyer && it.province == spot && it.domain == t.domain && !it.moving }
+                ?: sim.military.newArmy(buyer, spot, t.domain)
+            army.units[t.ordinal] += qty.toFloat()
+        }
+        game.addRel(seller, buyer, 8f)
+        // os inimigos do comprador não gostam
+        for (o in game.nations) if (o.alive && o.id != seller && o.id != buyer && (sim.atWar(o.id, buyer) || game.rel(o.id, buyer) < -50f)) game.addRel(seller, o.id, -4f)
+        if (sim.involvesPlayer(seller, buyer)) sim.feed("factory", "${sim.nation(seller).name} vendeu $qty ${t.label.lowercase()} para ${b.name} por ${Fmt.money(price)}", 1)
+        sim.touch()
+        return null
+    }
+
+    /** Países do computador pedem para comprar do jogador. */
+    private fun offersToPlayer() {
+        val p = game.player
+        if (!sim.player.alive || game.proposals.size >= 4 || !sim.chance(0.35)) return
+        val buyers = game.nations.filter { it.alive && it.id != p && !sim.atWar(it.id, p) && game.rel(it.id, p) >= 15f && game.proposals.none { q -> q.from == it.id } }
+        if (buyers.isEmpty()) return
+        val b = sim.pick(buyers)
+        // recurso que falta para eles e sobra para você
+        val res = Resource.entries.filter { surplus(p, it) > 3f && surplus(b.id, it) < -3f }
+        if (res.isNotEmpty() && sim.chance(0.6)) {
+            val r = sim.pick(res)
+            val amount = min(surplus(p, r) * 0.5f, -surplus(b.id, r)).coerceAtLeast(1f)
+            if (dealRefusal(p, b.id, r, amount) == null) game.proposals += Proposal(b.id, "BUY_RES:${r.name}", game.day, amount.toDouble())
+            return
+        }
+        // em guerra, compram armas
+        if (sim.atWarAny(b.id)) {
+            val t = sim.pick(listOf(UnitType.INFANTRY, UnitType.ARMOR, UnitType.ARTILLERY, UnitType.FIGHTER))
+            val qty = (2 + sim.randInt(4)).coerceAtMost(armsAvailable(p, t) / 3)
+            if (qty >= 1 && armsRefusal(p, b.id, t, qty) == null) game.proposals += Proposal(b.id, "BUY_ARMS:${t.name}", game.day, qty.toDouble())
+        }
+    }
 
     fun tradeBalance(n: Int): Float = Resource.entries.sumOf { balance(n, it).toDouble() }.toFloat()
 
@@ -305,7 +422,10 @@ class Development(private val sim: Sim) {
         val a = game.armies.firstOrNull { it.owner == n.id && it.province == spot && it.domain == Domain.LAND && !it.moving && !it.battle }
             ?: sim.military.newArmy(n.id, spot, Domain.LAND)
         a.units[UnitType.INFANTRY.ordinal] += count
-        if (n.id == game.player) sim.feed("military", "+${count.toInt()} divisões de reservistas em ${world.provinces[spot].name}", 0, spot)
+        if (n.id == game.player) {
+            val k = count.toInt()
+            sim.feed("military", "+$k ${if (k == 1) "divisão" else "divisões"} de reservistas em ${world.provinces[spot].name}", 0)
+        }
     }
 
     /** Jogador: ponto de reunião ou capital. Computador: frente de batalha, fronteira tensa ou capital. */
@@ -343,8 +463,23 @@ class Development(private val sim: Sim) {
             monthlyProjects(n)
             monthlyRecruits(n)
         }
+        monthlyDeals()
+        offersToPlayer()
+        aiDeals()
         aiProjects()
         record()
+    }
+
+    /** Contratos entre países do computador. */
+    private fun aiDeals() {
+        if (!sim.chance(0.5)) return
+        val r = sim.pick(Resource.entries)
+        val sellers = game.nations.filter { it.alive && it.id != game.player && surplus(it.id, r) > 5f }
+        val buyers = game.nations.filter { it.alive && it.id != game.player && surplus(it.id, r) < -5f }
+        if (sellers.isEmpty() || buyers.isEmpty()) return
+        val s = sim.pick(sellers); val b = buyers.maxBy { game.rel(s.id, it.id) }
+        val amount = min(surplus(s.id, r), -surplus(b.id, r)) * 0.5f
+        if (game.deals.none { it.seller == s.id && it.buyer == b.id && it.resource == r }) sellResource(s.id, b.id, r, amount)
     }
 
     /** Países do computador também constroem, devagar. */

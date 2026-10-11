@@ -110,4 +110,88 @@ class ScreensRenderTest {
         }
         shot("21_guerra")
     }
+
+    @Test fun newFeatures() {
+        val sim = TestWorld.newSim("BRA", seed = 61)
+        val c = controller(sim)
+        val g = sim.game
+        val me = sim.player
+        rule.mainClock.autoAdvance = false
+        rule.setContent { SoberanoTheme { GameScreen(c, {}, {}, {}, SaveStore(Files.createTempDirectory("n").toFile())) } }
+        rule.runOnIdle {
+            repeat(40) { sim.advanceDay() }
+            g.events.clear(); g.proposals.clear(); g.un.pending = null
+            me.politicalCapital = 60f; me.treasury = 500.0
+            val a = sim.armiesOf(me.id).first { it.domain == com.dmwnezes.soberano.sim.Domain.LAND }
+            sim.military.appoint(a, g.generalPool.first())
+            sim.military.fortify(me, me.capital)
+            repeat(95) { sim.advanceDay() }
+            g.events.clear(); g.un.pending = null
+            c.selArmy = a.id; c.refresh()
+        }
+        shot("40_general")
+        rule.runOnIdle { c.selArmy = -1; c.selectProvince(me.capital) }
+        shot("41_forte")
+        // desembarque: guerra com o Uruguai e alvo costeiro
+        rule.runOnIdle {
+            val ury = g.nations.first { it.code == "URY" }
+            sim.diplomacy.declareWar(me.id, ury.id)
+            val a = sim.armiesOf(me.id).first { it.domain == com.dmwnezes.soberano.sim.Domain.LAND }
+            a.units[com.dmwnezes.soberano.sim.UnitType.INFANTRY.ordinal] = 4f
+            for (t in listOf(com.dmwnezes.soberano.sim.UnitType.ARMOR, com.dmwnezes.soberano.sim.UnitType.ARTILLERY, com.dmwnezes.soberano.sim.UnitType.ANTIAIR)) a.units[t.ordinal] = 0f
+            c.selProvince = -1; c.selArmy = a.id
+            c.chooseTarget(sim.provincesOf(ury.id).first { sim.world.provinces[it].coastal && it != ury.capital })
+            g.events.clear(); g.un.pending = null
+        }
+        shot("42_ordem_mar")
+        // ONU
+        rule.runOnIdle {
+            c.clearTarget(); c.selArmy = -1
+            sim.unitedNations.propose(com.dmwnezes.soberano.sim.ResolutionType.CONDEMN, g.nations.first { it.code == "PRK" }.id)
+        }
+        shot("43_onu")
+        rule.runOnIdle { sim.unitedNations.resolve(1); c.tab = Tab.WORLD; c.subTab[Tab.WORLD] = 2; c.refresh() }
+        shot("44_onu_aba")
+        // campanha
+        rule.runOnIdle {
+            c.tab = null
+            for (w in g.wars.toList()) sim.diplomacy.makePeace(w, me.id, com.dmwnezes.soberano.sim.PeaceTerms.WHITE)
+            me.nextElection = g.day + 90
+            repeat(31) { sim.advanceDay() }
+            g.events.clear(); g.un.pending = null
+            sim.politics.campaigns.promise(com.dmwnezes.soberano.sim.Promise.HEALTH)
+            c.tab = Tab.GOVERNMENT; c.subTab[Tab.GOVERNMENT] = 0; c.refresh()
+        }
+        shot("45_campanha")
+        // comércio
+        rule.runOnIdle { c.tab = Tab.DIPLOMACY; c.focusNation = g.nations.first { it.code == "ARG" }.id; c.refresh() }
+        shot("46_comercio")
+        // jornal, busca e legenda
+        rule.runOnIdle { c.tab = null; c.focusNation = -1; c.showPaper = true; c.refresh() }
+        shot("47_jornal")
+        rule.runOnIdle { c.showPaper = false; c.paperSeenDay = g.paper?.day ?: -1; c.mapMode = MapMode.RELATIONS; c.refresh() }
+        shot("48_legenda")
+        rule.runOnIdle { c.mapMode = MapMode.POLITICAL; c.showSearch = true; c.refresh() }
+        shot("49_busca")
+        rule.runOnIdle {
+            c.showSearch = false
+            g.election = com.dmwnezes.soberano.sim.ElectionResult(g.day, 54.3f, true, "Marta Fontes"); c.refresh()
+        }
+        shot("50_eleicao")
+        org.junit.Assert.assertEquals(1, rule.onAllNodes(androidx.compose.ui.test.hasText("Reeleito!")).fetchSemanticsNodes().size)
+    }
+
+    @Test fun civilWarOnMap() {
+        val sim = TestWorld.newSim("BRA", seed = 62)
+        val c = controller(sim)
+        rule.mainClock.autoAdvance = false
+        rule.setContent { SoberanoTheme { GameScreen(c, {}, {}, {}, SaveStore(Files.createTempDirectory("cw").toFile())) } }
+        rule.runOnIdle {
+            sim.civil.secession(sim.player)
+            repeat(20) { sim.advanceDay() }
+            sim.game.events.clear(); sim.game.un.pending = null
+            c.mapMode = MapMode.WAR; c.refresh()
+        }
+        shot("51_guerra_civil")
+    }
 }

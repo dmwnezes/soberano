@@ -47,6 +47,7 @@ class Ai(private val sim: Sim) {
     private fun strategic(n: Nation) {
         economy(n)
         build(n)
+        extras(n)
         diplomacy(n)
         considerWar(n)
         considerPeace(n)
@@ -148,6 +149,33 @@ class Ai(private val sim: Sim) {
         for (a in sim.armiesOf(n.id)) if (game.armies.contains(a) && !a.moving && !a.battle && a.divisions() < 30f) {
             val other = game.armies.firstOrNull { it !== a && it.owner == n.id && it.province == a.province && it.domain == a.domain && !it.moving && !it.battle }
             if (other != null) sim.military.merge(a, other)
+        }
+    }
+
+    /** Transportes, fortificações e generais. */
+    private fun extras(n: Nation) {
+        val provinces = sim.provincesOf(n.id).filter { game.controller[it] == n.id }
+        if (provinces.isEmpty()) return
+        val coastal = provinces.filter { world.provinces[it].coastal }
+        // guerra além-mar: precisa de transportes
+        if (sim.atWarAny(n.id) && coastal.isNotEmpty()) {
+            val enemies = game.wars.filter { it.involves(n.id) }.flatMap { if (it.side(n.id) == 1) it.defenders else it.attackers }
+            val landReach = enemies.any { it in neighborsOf(n.id) }
+            val need = sim.dev.landDivisions(n.id) * 0.4f - sim.military.transportCapacity(n.id)
+            if (!landReach && need > 0f && n.militaryFund > UnitType.TRANSPORT.cost * 2) {
+                repeat(kotlin.math.ceil(need / 4f).toInt().coerceAtMost(4)) { sim.military.buy(n, UnitType.TRANSPORT, coastal.first()) }
+            }
+        }
+        // fortifica quando o vizinho hostil é mais forte
+        if (threatLevel(n) > 1.1f && sim.chance(0.2)) {
+            val border = provinces.filter { p -> world.provinces[p].neighbors.any { q -> game.owner[q] != n.id && game.rel(n.id, game.owner[q]) < -40f } }
+            val spotF = (listOf(n.capital) + border.sortedByDescending { game.provPop[it] }).firstOrNull { sim.military.canFortify(n, it) == null }
+            if (spotF != null) sim.military.fortify(n, spotF)
+        }
+        // generais para os maiores exércitos
+        if (n.income >= 2 && sim.chance(0.15)) {
+            sim.armiesOf(n.id).filter { it.domain == Domain.LAND && it.general == null }.maxByOrNull { it.divisions() }
+                ?.takeIf { it.divisions() >= 6f }?.general = sim.military.randomGeneral(if (n.income >= 4) 1 else 0)
         }
     }
 
@@ -321,7 +349,7 @@ class Ai(private val sim: Sim) {
             if (t != null && sim.military.order(a, t) == null) return
         }
         // sem alvo por terra: desembarque
-        if (sim.military.transportCapacity(n.id) >= a.divisions() && sim.randf() < 0.3f) {
+        if (sim.military.transportCapacity(n.id) >= a.divisions() && sim.randf() < 0.6f) {
             val targets = world.coastalIds.filter { sim.atWar(n.id, game.controller[it]) && enemyPowerAt(n.id, it) < mine }
             val t = targets.minByOrNull { world.distanceKm(here, it) } ?: return
             val path = sim.military.landPath(n.id, here, t, true) ?: return

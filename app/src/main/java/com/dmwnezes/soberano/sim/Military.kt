@@ -92,7 +92,7 @@ class Military(private val sim: Sim) {
                 val n = sim.nation(a.owner)
                 val infra = 0.75f + n.index[Area.INFRA.ordinal] / 200f
                 val enemy = if (sim.atWar(a.owner, game.controller[a.province])) 0.8f else 1f
-                s * infra * enemy
+                s * infra * enemy * (if (a.general?.trait == GeneralTrait.FAST) 1.2f else 1f)
             }
             Domain.SEA -> {
                 var s = Float.MAX_VALUE
@@ -101,6 +101,53 @@ class Military(private val sim: Sim) {
             }
             Domain.AIR -> AIR_SPEED
         }
+    }
+
+    /**
+     * Caminho que desembarca exatamente em [to]: marcha até o porto amigo que dá a viagem mais curta
+     * e de lá segue de navio. Null se não houver porto ou se o alvo não for costeiro.
+     */
+    fun seaPath(owner: Int, from: Int, to: Int): IntArray? {
+        if (!world.provinces[to].coastal || !sim.canEnter(owner, to)) return null
+        var best: IntArray? = null; var bestCost = Double.MAX_VALUE
+        // portos candidatos: a própria província e portos amigos a até ~2500 km
+        val ports = world.coastalIds.filter { p ->
+            p != to && (p == from || (game.controller[p] == owner || sim.allied(owner, game.controller[p]))) &&
+                world.distanceKm(from, p) < 2500 && world.distanceKm(p, to) <= SEA_RANGE_KM * 3
+        }.sortedBy { world.distanceKm(from, it) + world.distanceKm(it, to) }.take(12)
+        for (port in ports) {
+            val land = if (port == from) IntArray(0) else (landPath(owner, from, port, false) ?: continue)
+            var landKm = 0.0; var prev = from
+            for (q in land) { landKm += legKm(prev, q); prev = q }
+            val cost = landKm + world.distanceKm(port, to) * 25.0 / SEA_SPEED
+            if (cost < bestCost) { bestCost = cost; best = land + to }
+        }
+        return best
+    }
+
+    /** Ordem de desembarque numa praia escolhida. */
+    fun orderBySea(a: Army, target: Int): String? {
+        if (a.domain != Domain.LAND) return "Só tropas de terra desembarcam"
+        if (a.battle) return "Em combate"
+        if (!world.provinces[target].coastal) return "A província precisa ter litoral"
+        if (!sim.canEnter(a.owner, target)) return "Sem acesso: precisa de guerra, aliança ou passagem"
+        if (transportCapacity(a.owner) < a.divisions()) return "Faltam transportes: cada um leva 4 divisões"
+        val path = seaPath(a.owner, a.province, target) ?: return "Nenhum porto amigo alcança essa praia"
+        setPath(a, path)
+        sim.touch()
+        return null
+    }
+
+    fun previewSea(a: Army, target: Int): Pair<IntArray, Int>? {
+        if (a.domain != Domain.LAND) return null
+        val path = seaPath(a.owner, a.province, target) ?: return null
+        var days = 0.0; var prev = a.province
+        for (q in path) {
+            val sea = !isLandNeighbor(prev, q)
+            days += legKm(prev, q) / (if (sea) SEA_SPEED else armySpeed(a))
+            prev = q
+        }
+        return path to kotlin.math.ceil(days).toInt().coerceAtLeast(1)
     }
 
     /** Ordem de movimento. Retorna motivo da recusa ou null. */
@@ -229,7 +276,8 @@ class Military(private val sim: Sim) {
         // recuperação de moral
         for (a in game.armies) if (!a.battle) {
             val friendly = !sim.atWar(a.owner, game.controller[a.province])
-            a.morale = min(1f, a.morale + if (friendly) 0.025f else 0.012f)
+            val insp = if (a.general?.trait == GeneralTrait.INSPIRING) 2f else 1f
+            a.morale = min(1f, a.morale + (if (friendly) 0.025f else 0.012f) * insp)
         }
     }
 
@@ -268,14 +316,21 @@ class Military(private val sim: Sim) {
 
         val defAttack = def.sumOf { groundAttack(it).toDouble() }.toFloat() * supDef + airDmgDef + navDef
         val attAttack = att.sumOf { groundAttack(it).toDouble() }.toFloat() * supAtt + airDmgAtt + navAtt
-        val dmgToAtt = defAttack * 1.2f * DAMAGE_SCALE * (0.85f + sim.randf() * 0.3f)
-        val dmgToDef = attAttack * DAMAGE_SCALE * (0.85f + sim.randf() * 0.3f)
+        // fortificação: quem defende a província fortificada bate mais e apanha menos
+        val fortLvl = game.fort.getOrElse(p) { 0 }
+        val fortAtt = 1f + 0.15f * fortLvl
+        val fortDef = 1f - 0.15f * fortLvl
+        val dmgToAtt = defAttack * 1.2f * fortAtt * DAMAGE_SCALE * (0.85f + sim.randf() * 0.3f)
+        val dmgToDef = attAttack * fortDef * DAMAGE_SCALE * (0.85f + sim.randf() * 0.3f)
 
         val hpAtt = att.sumOf { hp(it).toDouble() }.toFloat().coerceAtLeast(0.1f)
         val hpDef = def.sumOf { hp(it).toDouble() }.toFloat().coerceAtLeast(0.1f)
         applyDamage(att, dmgToAtt, hpAtt)
         applyDamage(def, dmgToDef, hpDef)
-        for (a in att + def) a.battle = true
+        for (a in att + def) {
+            a.battle = true
+            a.general?.let { gainXp(a, it, 1f) }
+        }
 
         // registro para a interface
         val bt = game.battles.firstOrNull { it.province == p }
@@ -291,7 +346,9 @@ class Military(private val sim: Sim) {
         val defBroken = def.all { it.morale < 0.2f || !it.alive() }
         if (attBroken || defBroken) {
             val losers = if (attBroken) att else def
+            val winners = if (attBroken) def else att
             val winnerOwner = if (attBroken) defOwner else attOwner
+            for (a in winners) a.general?.let { it.wins++; gainXp(a, it, 15f) }
             for (a in losers) retreat(a)
             sim.warBetween(attOwner, defOwner)?.let { w ->
                 if (w.side(winnerOwner) == 1) w.battlesA++ else w.battlesD++
@@ -307,7 +364,91 @@ class Military(private val sim: Sim) {
     private fun groundAttack(a: Army): Float {
         var s = 0f
         for (t in UnitType.of(Domain.LAND)) s += a.units[t.ordinal] * t.attack
-        return s * a.morale * techMult(a.owner, Domain.LAND)
+        return s * a.morale * techMult(a.owner, Domain.LAND) * (a.general?.attackMult() ?: 1f)
+    }
+
+    // ------------------------------------------------------------- generais
+
+    private val genFirst = listOf("Augusto", "Bento", "Caio", "Dário", "Emílio", "Flávio", "Gustavo", "Hugo", "Inácio", "Jonas",
+        "Lauro", "Mário", "Nestor", "Osvaldo", "Plínio", "Rui", "Silvio", "Tito", "Valter", "Zeca",
+        "Alda", "Brenda", "Célia", "Débora", "Estela", "Fernanda", "Glória", "Íris", "Lívia", "Marta", "Nádia", "Rosa", "Sara", "Vera")
+    private val genLast = listOf("Albuquerque", "Bastos", "Coutinho", "Dantas", "Figueiredo", "Guimarães", "Leal", "Mendonça",
+        "Neves", "Pimentel", "Quintela", "Resende", "Siqueira", "Tavares", "Vilela", "Brandão", "Castelo", "Falcão", "Lobo", "Prado")
+
+    fun randomGeneral(quality: Int = 0): General {
+        val a = (1 + sim.randInt(4) + quality).coerceIn(1, 5)
+        val d = (1 + sim.randInt(4) + quality).coerceIn(1, 5)
+        return General("Gen. ${sim.pick(genFirst)} ${sim.pick(genLast)}", a, d, sim.pick(GeneralTrait.entries))
+    }
+
+    fun refreshGeneralPool() {
+        game.generalPool.clear()
+        repeat(3) { game.generalPool += randomGeneral(if (it == 0) 1 else 0) }
+    }
+
+    val generalCost = 4f
+
+    /** Põe um general do banco no comando de [a]. */
+    fun appoint(a: Army, g: General): String? {
+        val n = sim.nation(a.owner)
+        if (a.domain != Domain.LAND) return "Generais comandam só tropas de terra"
+        if (n.politicalCapital < generalCost) return "Precisa de ${generalCost.toInt()} de capital político"
+        n.politicalCapital -= generalCost
+        game.generalPool.remove(g)
+        a.general = g
+        if (game.generalPool.isEmpty()) refreshGeneralPool()
+        sim.feed("military", "${g.name} assumiu o ${a.name}", 1, a.province)
+        sim.touch()
+        return null
+    }
+
+    private fun gainXp(a: Army, g: General, xp: Float) {
+        g.xp += xp
+        while (g.level < 5 && g.xp >= g.xpNeeded()) {
+            g.xp -= g.xpNeeded()
+            g.level++
+            if (sim.chance(0.5)) g.attack = min(5, g.attack + 1) else g.defense = min(5, g.defense + 1)
+            if (a.owner == game.player) sim.feed("victory", "${g.name} subiu para o nível ${g.level}", 1, a.province)
+        }
+    }
+
+    // ------------------------------------------------------------- fortificações
+
+    fun fortCost(p: Int): Double = 1.5 * (game.fort.getOrElse(p) { 0 } + 1) + game.provPop[p] / 20e6
+    val fortDays = 90
+
+    fun canFortify(n: Nation, p: Int): String? {
+        game.ensureArrays()
+        if (game.owner[p] != n.id || game.controller[p] != n.id) return "Precisa ser uma província sua e livre"
+        if (game.fort[p] >= 3) return "Já está no nível máximo"
+        if (game.fortBuild[p] > 0) return "Obra em andamento"
+        if (n.militaryFund + n.treasury < fortCost(p)) return "Dinheiro insuficiente"
+        return null
+    }
+
+    fun fortify(n: Nation, p: Int): String? {
+        canFortify(n, p)?.let { return it }
+        val cost = fortCost(p)
+        val fromFund = min(cost, max(0.0, n.militaryFund))
+        n.militaryFund -= fromFund; n.treasury -= cost - fromFund
+        game.fortBuild[p] = fortDays
+        if (n.id == game.player) sim.feed("shield", "Fortificação em obras em ${world.provinces[p].name}", 0, p)
+        sim.touch()
+        return null
+    }
+
+    fun dailyForts() {
+        game.ensureArrays()
+        for (p in game.fortBuild.indices) {
+            if (game.fortBuild[p] <= 0) continue
+            // obra para se a província for tomada
+            if (game.controller[p] != game.owner[p]) { game.fortBuild[p] = 0; continue }
+            game.fortBuild[p]--
+            if (game.fortBuild[p] == 0) {
+                game.fort[p] = min(3, game.fort[p] + 1)
+                if (game.owner[p] == game.player) sim.feed("shield", "Fortificação nível ${game.fort[p]} pronta em ${world.provinces[p].name}", 1, p)
+            }
+        }
     }
 
     private fun navalBombard(a: Army): Float =
@@ -348,7 +489,7 @@ class Military(private val sim: Sim) {
         for (a in armies) {
             val myHp = hp(a)
             if (myHp <= 0f) continue
-            val share = dmg * myHp / totalHp
+            val share = dmg * myHp / totalHp / (a.general?.defenseMult() ?: 1f)
             var lost = 0f
             for (t in UnitType.entries) if (t.domain == a.domain) {
                 val c = a.units[t.ordinal]
@@ -380,9 +521,23 @@ class Military(private val sim: Sim) {
             a.morale = max(a.morale, 0.25f)
             return
         }
+        if (options.isEmpty() && p.coastal && transportCapacity(a.owner) >= a.divisions() * 0.5f) {
+            // cercado no litoral: evacua por mar, perdendo parte da tropa
+            val port = game.owner.indices.filter { game.controller[it] == a.owner && world.provinces[it].coastal && it != a.province && !enemiesAt(a.owner, it, Domain.LAND) }
+                .minByOrNull { world.distanceKm(a.province, it) }
+            if (port != null && world.distanceKm(a.province, port) <= SEA_RANGE_KM * 2) {
+                for (t in UnitType.of(Domain.LAND)) a.units[t.ordinal] *= 0.75f
+                sim.nation(a.owner).casualtiesMonth += a.total() / 3f
+                if (a.owner == game.player) sim.feed("ship", "${a.name.ifEmpty { "Exército" }} fugiu por mar para ${world.provinces[port].name}", 2, port)
+                a.province = port
+                a.morale = max(a.morale, 0.3f)
+                return
+            }
+        }
         if (options.isEmpty()) {
-            // cercado: rendição
-            if (a.owner == game.player) sim.feed("defeat", "${a.name.ifEmpty { "Exército" }} se rendeu cercado", 3, a.province)
+            // cercado: rendição (o general é capturado)
+            if (a.owner == game.player) sim.feed("defeat", "${a.name.ifEmpty { "Exército" }} se rendeu cercado" +
+                (a.general?.let { ", ${it.name} foi capturado" } ?: ""), 3, a.province)
             sim.nation(a.owner).casualtiesMonth += a.total()
             a.units.fill(0f)
             return
@@ -432,7 +587,9 @@ class Military(private val sim: Sim) {
                 continue
             }
             val divs = attackers.sumOf { it.divisions().toDouble() }.toFloat()
-            game.siege[p] += min(2f, divs / 2f) / siegeDays(p)
+            val sieger = if (attackers.any { it.general?.trait == GeneralTrait.SIEGE }) 1.3f else 1f
+            val fortSlow = 1f + 0.5f * game.fort.getOrElse(p) { 0 }
+            game.siege[p] += min(2f, divs / 2f) / siegeDays(p) * sieger / fortSlow
             if (game.siege[p] >= 1f) {
                 game.siege[p] = 0f
                 val taker = attackers.maxBy { it.total() }.owner
@@ -440,6 +597,8 @@ class Military(private val sim: Sim) {
                 // libertação: volta para o dono se o conquistador é aliado dele
                 val newCtrl = if (owner == taker || sim.allied(owner, taker) && !sim.atWar(owner, taker)) owner else taker
                 game.controller[p] = newCtrl
+                // a muralha sofre com a tomada
+                if (game.fort.size > p && game.fort[p] > 0) game.fort[p]--
                 changed = true
                 val involvesPlayer = sim.involvesPlayer(taker, ctrl, owner)
                 if (involvesPlayer) {
@@ -567,6 +726,9 @@ class Military(private val sim: Sim) {
         if (into.id == other.id || into.owner != other.owner || into.province != other.province || into.domain != other.domain) return false
         val ti = into.total(); val to = other.total()
         for (t in UnitType.entries) into.units[t.ordinal] += other.units[t.ordinal]
+        // fica o general melhor
+        val og = other.general
+        if (og != null && (into.general == null || og.level > into.general!!.level)) into.general = og
         into.morale = (into.morale * ti + other.morale * to) / max(0.1f, ti + to)
         game.armies.remove(other)
         sim.touch()
@@ -685,8 +847,9 @@ class Military(private val sim: Sim) {
             val r = game.resistance[p]
             if (r > 60f) {
                 for (a in game.armies) if (a.province == p && a.owner == ctrl && a.domain == Domain.LAND) {
-                    for (t in UnitType.of(Domain.LAND)) a.units[t.ordinal] *= 0.97f
-                    sim.nation(ctrl).casualtiesMonth += a.total() * 0.03f
+                    val loss = if (a.general?.trait == GeneralTrait.LOGISTIC) 0.015f else 0.03f
+                    for (t in UnitType.of(Domain.LAND)) a.units[t.ordinal] *= 1f - loss
+                    sim.nation(ctrl).casualtiesMonth += a.total() * loss
                 }
                 if (ctrl == game.player && sim.chance(0.3)) sim.feed("bomb", "Guerrilha ataca em ${world.provinces[p].name}", 2, p)
             }
@@ -704,7 +867,8 @@ class Military(private val sim: Sim) {
         } else if (sim.nation(core).alive) {
             sim.diplomacy.transfer(p, core)
         } else {
-            sim.nation(ctrl).stability -= 5f
+            // o país anexado renasce, se a guerra civil estiver ligada
+            if (!sim.civil.liberate(core, p)) sim.nation(ctrl).stability -= 5f
             return
         }
         // tropas do antigo controlador saem

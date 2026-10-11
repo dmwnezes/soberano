@@ -56,6 +56,7 @@ private const val MAX_MEASURES = 5
 /** Tela para montar uma lei a partir de medidas e ver as consequências antes de aprovar. */
 @Composable
 fun LawEditor(c: GameController, onClose: () -> Unit) {
+    @Suppress("UNUSED_EXPRESSION") c.tick // relê quando o jogo avança (evita pular a recomposição)
     val me = c.me
     val chosen = remember { mutableStateListOf<String>() }
     var name by remember { mutableStateOf("") }
@@ -196,6 +197,7 @@ private fun ColumnScope.Consequences(a: LawAnalysis) {
 /** Explicação de qualquer lei: o que faz, quem apoia, quem rejeita e o efeito nos números. */
 @Composable
 fun LawInfo(c: GameController, id: String, onClose: () -> Unit) {
+    @Suppress("UNUSED_EXPRESSION") c.tick // relê quando o jogo avança (evita pular a recomposição)
     val law = Content.law(id) ?: run { onClose(); return }
     val me = c.me
     val active = id in me.laws

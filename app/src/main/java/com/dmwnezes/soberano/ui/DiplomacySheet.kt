@@ -48,6 +48,7 @@ fun DiplomacySheet(c: GameController) {
 
 @Composable
 private fun NationList(c: GameController) {
+    @Suppress("UNUSED_EXPRESSION") c.tick // relê quando o jogo avança (evita pular a recomposição)
     val g = c.game
     val me = g.player
     var q by remember { mutableStateOf("") }
@@ -100,6 +101,7 @@ private fun NationList(c: GameController) {
 
 @Composable
 fun ProposalRow(c: GameController, p: com.dmwnezes.soberano.sim.Proposal) {
+    @Suppress("UNUSED_EXPRESSION") c.tick // relê quando o jogo avança (evita pular a recomposição)
     val from = c.sim.nation(p.from)
     Row(Modifier.fillMaxWidth().padding(vertical = 3.dp).clip(Shapes.tile).background(Ink.raised).padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
         FlagView(from, 20.dp)
@@ -116,6 +118,7 @@ fun ProposalRow(c: GameController, p: com.dmwnezes.soberano.sim.Proposal) {
 
 @Composable
 private fun NationRow(c: GameController, n: Nation) {
+    @Suppress("UNUSED_EXPRESSION") c.tick // relê quando o jogo avança (evita pular a recomposição)
     val g = c.game
     val me = g.player
     val r = g.rel(me, n.id)
@@ -140,6 +143,7 @@ private fun NationRow(c: GameController, n: Nation) {
 
 @Composable
 private fun NationDetail(c: GameController, n: Nation) {
+    @Suppress("UNUSED_EXPRESSION") c.tick // relê quando o jogo avança (evita pular a recomposição)
     val g = c.game
     val me = g.player
     val sim = c.sim
@@ -244,6 +248,8 @@ private fun NationDetail(c: GameController, n: Nation) {
             ActionRow(Icons.Rounded.Block, if (sanctioned) "Retirar sanções" else "Aplicar sanções", "Corta o crescimento deles", true, active = sanctioned) { sim.diplomacy.sanction(me, n.id, false); c.refresh() }
             ActionRow(Icons.Rounded.DoNotDisturbOn, if (embargo) "Retirar embargo" else "Embargo total", "Corta comércio e metade das exportações de recursos", true, active = embargo) { sim.diplomacy.sanction(me, n.id, true); c.refresh() }
 
+            TradeSection(c, n)
+
             SectionTitle("Espionagem")
             for (m in SpyMission.entries) {
                 val ch = (sim.diplomacy.spyChance(me, n.id, m) * 100).toInt()
@@ -294,6 +300,7 @@ private fun NationDetail(c: GameController, n: Nation) {
 
 @Composable
 private fun CreateBlocDialog(c: GameController, onClose: () -> Unit) {
+    @Suppress("UNUSED_EXPRESSION") c.tick // relê quando o jogo avança (evita pular a recomposição)
     var name by remember { mutableStateOf("") }
     var military by remember { mutableStateOf(true) }
     var economic by remember { mutableStateOf(true) }
@@ -318,6 +325,17 @@ fun proposalText(c: GameController, p: com.dmwnezes.soberano.sim.Proposal): Stri
     "BLOC" -> "convida você para ${c.game.blocs.firstOrNull { it.id == p.value.toInt() }?.name ?: "um bloco"}"
     "JOIN_WAR" -> "pede que você entre na ${c.game.wars.firstOrNull { it.id == p.value.toInt() }?.name ?: "guerra"}"
     "DEMAND" -> "exige ${c.sim.world.provinces.getOrNull(p.value.toInt())?.name ?: "uma província"}, ou guerra"
+    else -> if (p.kind.startsWith("BUY_RES:")) {
+        val r = com.dmwnezes.soberano.sim.Resource.valueOf(p.kind.substringAfter(":"))
+        val yearly = p.value * c.game.prices[r.ordinal] * c.sim.dev.dealPremium
+        "quer comprar ${r.label.lowercase()}: ${Fmt.money(p.value)}/ano por ${c.sim.dev.dealYears} anos (rende ${Fmt.money(yearly / 12 * 0.5)}/mês)"
+    } else if (p.kind.startsWith("BUY_ARMS:")) {
+        val t = com.dmwnezes.soberano.sim.UnitType.valueOf(p.kind.substringAfter(":"))
+        "quer comprar ${p.value.toInt()} ${t.label.lowercase()} por ${Fmt.money(c.sim.dev.armsPrice(t, p.value.toInt()))}"
+    } else proposalTextBasic(p)
+}
+
+private fun proposalTextBasic(p: com.dmwnezes.soberano.sim.Proposal): String = when (p.kind) {
     else -> runCatching { "propõe ${TreatyType.valueOf(p.kind).label.lowercase()}" }.getOrDefault(p.kind)
 }
 
@@ -331,6 +349,7 @@ fun acceptProposal(c: GameController, p: com.dmwnezes.soberano.sim.Proposal) {
             if (g.player !in b.members) { b.members += g.player; g.treatyCache = null; sim.feed("bloc", "Você entrou em ${b.name}", 1) }
         }
         "JOIN_WAR" -> g.wars.firstOrNull { it.id == p.value.toInt() }?.let { w -> sim.diplomacy.joinWar(w, g.player, w.side(p.from)) }
+        "BUY_RES", "BUY_ARMS" -> {}
         "DEMAND" -> {
             val prov = p.value.toInt()
             if (g.owner.getOrNull(prov) == g.player) {
@@ -340,8 +359,18 @@ fun acceptProposal(c: GameController, p: com.dmwnezes.soberano.sim.Proposal) {
                 sim.feed("flag", "Você entregou ${sim.world.provinces[prov].name}", 2)
             }
         }
-        else -> runCatching { TreatyType.valueOf(p.kind) }.getOrNull()?.let { t ->
-            if (!sim.hasTreaty(t, p.from, g.player)) sim.diplomacy.sign(t, p.from, g.player)
+        else -> when {
+            p.kind.startsWith("BUY_RES:") -> {
+                val r = com.dmwnezes.soberano.sim.Resource.valueOf(p.kind.substringAfter(":"))
+                sim.dev.sellResource(g.player, p.from, r, p.value.toFloat())?.let { c.say(it, 2) }
+            }
+            p.kind.startsWith("BUY_ARMS:") -> {
+                val t = com.dmwnezes.soberano.sim.UnitType.valueOf(p.kind.substringAfter(":"))
+                sim.dev.sellArms(g.player, p.from, t, p.value.toInt())?.let { c.say(it, 2) }
+            }
+            else -> runCatching { TreatyType.valueOf(p.kind) }.getOrNull()?.let { t ->
+                if (!sim.hasTreaty(t, p.from, g.player)) sim.diplomacy.sign(t, p.from, g.player)
+            }
         }
     }
     sim.touch()

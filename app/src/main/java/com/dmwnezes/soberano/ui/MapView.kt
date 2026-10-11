@@ -109,7 +109,7 @@ class MapRenderer(private val world: WorldMap, typeface: Typeface?) {
 
     companion object {
         const val CACHE_W = 3072
-        private val stripe: Bitmap = Bitmap.createBitmap(10, 10, Bitmap.Config.ARGB_8888).also { b ->
+        val stripe: Bitmap = Bitmap.createBitmap(10, 10, Bitmap.Config.ARGB_8888).also { b ->
             val c = ACanvas(b)
             val p = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = android.graphics.Color.WHITE; strokeWidth = 3f }
             c.drawLine(-2f, 12f, 12f, -2f, p); c.drawLine(-2f, 2f, 2f, -2f, p); c.drawLine(8f, 12f, 12f, 8f, p)
@@ -125,6 +125,7 @@ class MapRenderer(private val world: WorldMap, typeface: Typeface?) {
     private val text = Paint(Paint.ANTI_ALIAS_FLAG).apply { this.typeface = typeface; textAlign = Paint.Align.CENTER }
     private val dash = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.STROKE; strokeCap = Paint.Cap.ROUND }
 
+    private val ownedCache = HashMap<Int, IntArray>()
     @Volatile private var cache: Bitmap? = null
     @Volatile private var cacheKey = Long.MIN_VALUE
     @Volatile private var pendingKey = Long.MIN_VALUE
@@ -139,6 +140,7 @@ class MapRenderer(private val world: WorldMap, typeface: Typeface?) {
         colors = fills; stripes = stripeColors
         if (key == cacheKey || key == pendingKey) return
         pendingKey = key
+        ownedCache.clear()
         computeLabels(sim)
         val f = fills.copyOf(); val s = stripeColors.copyOf()
         executor.execute {
@@ -181,23 +183,30 @@ class MapRenderer(private val world: WorldMap, typeface: Typeface?) {
         val fill = Paint().apply { style = Paint.Style.FILL; isAntiAlias = true }
         val border = Paint().apply { style = Paint.Style.STROKE; isAntiAlias = true }
         val stripe = Paint().apply { style = Paint.Style.FILL; isAntiAlias = true }
+        /** um shader só, reaproveitado (antes era criado um por província a cada quadro) */
+        val shader = BitmapShader(MapRenderer.stripe, Shader.TileMode.REPEAT, Shader.TileMode.REPEAT).also { stripe.shader = it }
+        var scale = -1f
+        val filters = HashMap<Int, PorterDuffColorFilter>()
+
+        fun stripeFor(color: Int, stroke: Float): Paint {
+            if (stroke != scale) {
+                scale = stroke
+                shader.setLocalMatrix(android.graphics.Matrix().apply { setScale(stroke * 1.4f, stroke * 1.4f) })
+            }
+            stripe.colorFilter = filters.getOrPut(color) { PorterDuffColorFilter(color, PorterDuff.Mode.SRC_IN) }
+            return stripe
+        }
     }
     private val uiPaints = Paints()
 
     private fun drawProvinces(c: ACanvas, ids: Iterable<Int>, f: IntArray, s: IntArray, stroke: Float, visible: RectF?, pp: Paints = uiPaints) {
-        val fill = pp.fill; val border = pp.border; val stripePaint = pp.stripe
+        val fill = pp.fill; val border = pp.border
         border.strokeWidth = stroke
         for (i in ids) {
             if (visible != null && !visibleProv(i, visible)) continue
             fill.color = f[i]
             c.drawPath(paths[i], fill)
-            if (s[i] != 0) {
-                stripePaint.shader = BitmapShader(stripe, Shader.TileMode.REPEAT, Shader.TileMode.REPEAT).apply {
-                    val m = android.graphics.Matrix(); m.setScale(stroke * 1.4f, stroke * 1.4f); setLocalMatrix(m)
-                }
-                stripePaint.colorFilter = PorterDuffColorFilter(s[i], PorterDuff.Mode.SRC_IN)
-                c.drawPath(paths[i], stripePaint)
-            }
+            if (s[i] != 0) c.drawPath(paths[i], pp.stripeFor(s[i], stroke))
             border.color = darken(f[i], 0.72f)
             c.drawPath(paths[i], border)
         }
@@ -255,14 +264,17 @@ class MapRenderer(private val world: WorldMap, typeface: Typeface?) {
         val owner = sim.game.owner
         glow.color = color
         glow.strokeWidth = width
-        val ids = owner.indices.filter { owner[it] == nation && visibleProv(it, view) }
+        val all = ownedCache.getOrPut(nation) { owner.indices.filter { owner[it] == nation }.toIntArray() }
+        val ids = all.filter { visibleProv(it, view) }
         for (i in ids) c.drawPath(paths[i], glow)
         // repinta por cima: só a metade externa do traço fica visível
-        border.strokeWidth = 0.8f * width / 3.2f
+        val pp = uiPaints
+        pp.border.strokeWidth = 0.8f * width / 3.2f
         for (i in ids) {
-            fill.color = colors[i]; c.drawPath(paths[i], fill)
-            if (stripes[i] != 0) { stripePaint.colorFilter = PorterDuffColorFilter(stripes[i], PorterDuff.Mode.SRC_IN); c.drawPath(paths[i], stripePaint) }
-            border.color = darken(colors[i], 0.72f); c.drawPath(paths[i], border)
+            pp.fill.color = colors[i]; c.drawPath(paths[i], pp.fill)
+            // listras de ocupação com o mesmo padrão do resto do mapa (antes pintava a província inteira)
+            if (stripes[i] != 0) c.drawPath(paths[i], pp.stripeFor(stripes[i], width / 3.2f))
+            pp.border.color = darken(colors[i], 0.72f); c.drawPath(paths[i], pp.border)
         }
     }
 
@@ -388,6 +400,31 @@ class MapRenderer(private val world: WorldMap, typeface: Typeface?) {
             c.drawCircle(x, y, r, marker)
             marker.color = Ink.amber.toArgb()
             c.drawArc(RectF(x - r, y - r, x + r, y + r), -90f, 360f * v, false, marker)
+        }
+
+        // fortificações (com zoom)
+        if (s > 2.2f) {
+            val forts = g.fort
+            for (p in forts.indices) {
+                val lvl = forts[p]
+                val building = g.fortBuild.getOrElse(p) { 0 } > 0
+                if (lvl == 0 && !building) continue
+                val pr = world.provinces[p]
+                if (pr.cx < view.left || pr.cx > view.right || pr.cy < view.top || pr.cy > view.bottom) continue
+                val x = sx(pr.cx) - 22f * dp; val y = sy(pr.cy) + 8f * dp
+                val w = 7f * dp
+                marker.style = Paint.Style.FILL
+                marker.color = 0xE61E2418.toInt()
+                c.drawRoundRect(RectF(x - w - 3 * dp, y - w - 3 * dp, x + w + 3 * dp, y + w + 2 * dp), 4 * dp, 4 * dp, marker)
+                marker.color = if (building) Ink.muted.toArgb() else Ink.brass.toArgb()
+                // torre com ameias
+                c.drawRect(x - w * 0.7f, y - w * 0.3f, x + w * 0.7f, y + w, marker)
+                for (k in -1..1) c.drawRect(x + k * w * 0.5f - w * 0.18f, y - w * 0.8f, x + k * w * 0.5f + w * 0.18f, y - w * 0.3f, marker)
+                if (lvl > 1) {
+                    text.textSize = 8f * dp; text.color = Ink.brass.toArgb()
+                    c.drawText("$lvl", x + w + 6 * dp, y + 3 * dp, text)
+                }
+            }
         }
 
         // batalhas
@@ -556,7 +593,7 @@ fun WorldMapView(
     outlineNation: Int = sim.game.player,
     highlightNation: Int = -1,
     selectedProvince: Int = -1,
-    frame: Long = 0L,
+    frame: () -> Long = { 0L },
     initialCenter: Int = -1,
     onTapProvince: (Int) -> Unit = {},
     onTapArmy: (Army) -> Unit = {},
@@ -604,7 +641,7 @@ fun WorldMapView(
                 )
             },
     ) {
-        @Suppress("UNUSED_EXPRESSION") frame; cacheVersion
+        frame(); cacheVersion
         val sc = camera.scale; camera.ox; camera.oy
         if (sc <= 0f) return@Canvas
         val key = MapColors.key(sim, mode, focusNation)

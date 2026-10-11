@@ -154,6 +154,8 @@ data class Settings(
     var economy: EconomyDepth = EconomyDepth.MEDIUM,
     var difficulty: Difficulty = Difficulty.NORMAL,
     var aiAggression: Float = 1f,
+    /** províncias revoltadas podem virar país novo */
+    var civilWar: Boolean = true,
     var seed: Long = System.currentTimeMillis(),
 )
 
@@ -242,6 +244,7 @@ class Army(
     var battle: Boolean = false,
     /** alvo de ataque aéreo/naval */
     var target: Int = -1,
+    var general: General? = null,
 ) {
     fun total(): Float = units.sum()
     fun alive() = total() > 0.05f
@@ -316,7 +319,7 @@ class Game(
     val armies: MutableList<Army> = mutableListOf(),
     var nextArmyId: Int = 1,
     var nextWarId: Int = 1,
-    val relations: FloatArray,
+    var relations: FloatArray,
     val treaties: MutableList<Treaty> = mutableListOf(),
     val wars: MutableList<War> = mutableListOf(),
     val blocs: MutableList<Bloc> = mutableListOf(),
@@ -340,6 +343,19 @@ class Game(
     val history: MutableList<HistoryPoint> = mutableListOf(),
     /** preço relativo de cada recurso (1 = normal) */
     val prices: FloatArray = FloatArray(Resource.entries.size) { 1f },
+    /** nível de fortificação de cada província (0 a 3) */
+    var fort: IntArray = IntArray(0),
+    /** dias que faltam para terminar a obra de fortificação (0 = nada em obra) */
+    var fortBuild: IntArray = IntArray(0),
+    /** generais esperando nomeação (oferecidos ao jogador) */
+    val generalPool: MutableList<General> = mutableListOf(),
+    val un: UnState = UnState(),
+    val deals: MutableList<ResourceDeal> = mutableListOf(),
+    val campaign: Campaign = Campaign(),
+    var election: ElectionResult? = null,
+    /** manchetes do mês corrente (viram o jornal na virada do mês) */
+    val newsBuffer: MutableList<FeedItem> = mutableListOf(),
+    var paper: Newspaper? = null,
     var rngState: Long = 1L,
     var eventCalm: Int = 0,
 ) {
@@ -348,22 +364,43 @@ class Game(
     @Transient var gdpCache: DoubleArray? = null
     @Transient var popCache: DoubleArray? = null
     @Transient var provCount: IntArray? = null
+    @Transient var occCount: IntArray? = null
 
-    fun invalidate() { gdpCache = null; popCache = null; provCount = null }
+    fun invalidate() { gdpCache = null; popCache = null; provCount = null; occCount = null }
+
+    /** Saves antigos não têm fortificações; cria os vetores do tamanho do mapa. */
+    fun ensureArrays() {
+        if (fort.size != owner.size) fort = IntArray(owner.size)
+        if (fortBuild.size != owner.size) fortBuild = IntArray(owner.size)
+    }
+
+    /** Aumenta a matriz de relações para caber um país novo. */
+    fun growRelations(newN: Int) {
+        val oldN = kotlin.math.sqrt(relations.size.toDouble()).toInt()
+        if (oldN >= newN) return
+        val r = FloatArray(newN * newN)
+        for (a in 0 until oldN) for (b in 0 until oldN) r[a * newN + b] = relations[a * oldN + b]
+        relations = r
+        warCache = null; treatyCache = null
+        invalidate()
+    }
     private fun ensureTotals() {
         if (gdpCache != null) return
         val g = DoubleArray(nations.size); val p = DoubleArray(nations.size); val c = IntArray(nations.size)
+        val occ = IntArray(nations.size)
         for (i in owner.indices) {
             val o = owner[i]
+            if (controller[i] != o) occ[o]++
             // províncias ocupadas rendem pouco para o dono
             val f = if (controller[i] == o) 1.0 else 0.3
             g[o] += provGdp[i] * f; p[o] += provPop[i]; c[o]++
         }
-        gdpCache = g; popCache = p; provCount = c
+        gdpCache = g; popCache = p; provCount = c; occCount = occ
     }
     fun natGdp(id: Int): Double { ensureTotals(); return gdpCache!![id] }
     fun natPop(id: Int): Double { ensureTotals(); return popCache!![id] }
     fun natProvinces(id: Int): Int { ensureTotals(); return provCount!![id] }
+    fun natOccupied(id: Int): Int { ensureTotals(); return occCount!![id] }
 
     val n get() = nations.size
     fun rel(a: Int, b: Int) = relations[a * n + b]
@@ -401,3 +438,107 @@ class HistoryPoint(val day: Int, val gdp: Double, val approval: Float, val stabi
 enum class Resource(val label: String, val icon: String) {
     OIL("Petróleo", "oil"), MINERALS("Minérios", "factory"), FOOD("Alimentos", "field")
 }
+
+// ---------------------------------------------------------------- generais
+
+enum class GeneralTrait(val label: String, val desc: String) {
+    OFFENSIVE("Ofensivo", "+15% de ataque"),
+    DEFENSIVE("Defensivo", "+15% de defesa"),
+    FAST("Rápido", "+20% de velocidade"),
+    SIEGE("Sitiador", "cercos 30% mais rápidos"),
+    INSPIRING("Inspirador", "moral volta duas vezes mais rápido"),
+    LOGISTIC("Logístico", "tropas perdem menos no inverno e na guerrilha"),
+}
+
+@Serializable
+class General(
+    val name: String,
+    var attack: Int,
+    var defense: Int,
+    val trait: GeneralTrait,
+    var level: Int = 1,
+    var xp: Float = 0f,
+    var wins: Int = 0,
+) {
+    fun attackMult() = 1f + attack * 0.04f + (level - 1) * 0.03f + (if (trait == GeneralTrait.OFFENSIVE) 0.15f else 0f)
+    fun defenseMult() = 1f + defense * 0.04f + (level - 1) * 0.03f + (if (trait == GeneralTrait.DEFENSIVE) 0.15f else 0f)
+    fun xpNeeded() = 20f * level * level
+}
+
+// ---------------------------------------------------------------- ONU
+
+enum class ResolutionType(val label: String, val icon: String) {
+    SANCTIONS("Sanções coletivas", "block"),
+    PEACEKEEPING("Missão de paz", "dove"),
+    CONDEMN("Condenação", "alert"),
+    AID("Ajuda humanitária", "handshake"),
+    CLIMATE("Acordo do clima", "leaf"),
+}
+
+@Serializable
+class Resolution(
+    val type: ResolutionType,
+    /** país alvo (sanção, condenação, ajuda); -1 no clima */
+    val target: Int,
+    /** segundo país (missão de paz: o outro lado da guerra) */
+    val other: Int = -1,
+    val proposer: Int,
+    val day: Int,
+)
+
+@Serializable
+class ResolutionRecord(
+    val type: ResolutionType, val target: Int, val other: Int, val proposer: Int, val day: Int,
+    val yes: Int, val no: Int, val abstain: Int, val vetoBy: Int, val passed: Boolean, val playerVote: Int,
+)
+
+@Serializable
+class UnState(
+    /** votação aberta esperando o voto do jogador */
+    var pending: Resolution? = null,
+    val history: MutableList<ResolutionRecord> = mutableListOf(),
+    var nextSession: Int = 120,
+    /** prazo do acordo do clima em vigor */
+    var climateUntil: Int = -1,
+    val climateMembers: MutableList<Int> = mutableListOf(),
+)
+
+// ---------------------------------------------------------------- comércio
+
+/** Contrato: [seller] vende [amount] US$ bi/ano (preço normal) de [resource] para [buyer] até [until]. */
+@Serializable
+class ResourceDeal(val seller: Int, val buyer: Int, val resource: Resource, val amount: Float, val start: Int, val until: Int)
+
+// ---------------------------------------------------------------- eleição
+
+enum class Promise(val label: String, val group: Group, val desc: String) {
+    HEALTH("Mais saúde", Group.RETIREES, "Índice de saúde precisa subir 3 pontos"),
+    JOBS("Empregos", Group.WORKERS, "Desemprego precisa cair 1 ponto"),
+    EDUCATION("Educação", Group.YOUTH, "Índice de educação precisa subir 3 pontos"),
+    NO_TAX("Não subir impostos", Group.BUSINESS, "Imposto não pode subir"),
+    ARMY("Forças fortes", Group.MILITARY, "Verba de defesa não pode cair"),
+    ORDER("Segurança", Group.RELIGIOUS, "Índice de segurança precisa subir 3 pontos"),
+}
+
+@Serializable
+class PromiseMade(val promise: Promise, val day: Int, val baseline: Float, var resolved: Boolean = false)
+
+@Serializable
+class Campaign(
+    var rallies: Int = 0,
+    var lastRallyDay: Int = -999,
+    var debateDone: Boolean = false,
+    var adsDone: Int = 0,
+    /** bônus de votos da campanha (pontos de aprovação na urna) */
+    var boost: Float = 0f,
+    val promises: MutableList<PromiseMade> = mutableListOf(),
+    var opponent: String = "",
+)
+
+@Serializable
+class ElectionResult(val day: Int, val myShare: Float, val won: Boolean, val opponent: String, var seen: Boolean = false)
+
+// ---------------------------------------------------------------- jornal
+
+@Serializable
+class Newspaper(val day: Int, val headline: String, val sub: String, val national: List<String>, val world: List<String>, val economy: List<String>)

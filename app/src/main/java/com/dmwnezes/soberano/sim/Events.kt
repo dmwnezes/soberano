@@ -32,7 +32,8 @@ class Events(private val sim: Sim) {
             val def = pickEvent(sim.pick(cats), n) ?: continue
             val pe = create(def, n)
             val choice = def.choices.maxBy { c -> c.effects.sumOf { score(it).toDouble() } }
-            for (e in choice.effects) apply(n, e, pe.other)
+            // preços mundiais só mudam com eventos do jogador (senão 190 países empurram o petróleo ao infinito)
+            for (e in choice.effects) if (!e.key.startsWith("price:")) apply(n, e, pe.other)
         }
     }
 

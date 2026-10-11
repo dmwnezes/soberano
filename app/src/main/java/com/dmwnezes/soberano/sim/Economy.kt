@@ -46,9 +46,8 @@ class Economy(private val sim: Sim) {
         game.treaties.count { it.type == TreatyType.EMBARGO && it.b == id }
 
     fun occupiedFraction(id: Int): Float {
-        var own = 0; var occ = 0
-        for (i in game.owner.indices) if (game.owner[i] == id) { own++; if (game.controller[i] != id) occ++ }
-        return if (own == 0) 0f else occ.toFloat() / own
+        val own = game.natProvinces(id)
+        return if (own == 0) 0f else game.natOccupied(id).toFloat() / own
     }
 
     /** Crescimento anual previsto (também mostrado na interface). */
@@ -66,6 +65,7 @@ class Economy(private val sim: Sim) {
         if (game.settings.economy != EconomyDepth.SIMPLE) g -= min(0.03f, max(0f, n.inflation - 6f) * 0.002f)
         g += lawSum(n) { it.growth }
         g += sim.dev.tradeGrowth(n) + sim.dev.builtGrowth(n)
+        if (sim.unitedNations.inClimateDeal(n.id)) g -= 0.002f
         if (n.id == game.player) g += sim.dev.economyBonus()
         g += (n.tech[TechBranch.ECONOMY.ordinal] - 3) * 0.001f
         if (n.id == game.player) g += (game.settings.difficulty.economy - 1f) * 0.02f
@@ -78,6 +78,7 @@ class Economy(private val sim: Sim) {
         t += n.laws.sumOf { (Content.law(it)?.index?.get(a) ?: 0f).toDouble() }.toFloat()
         t += (n.tech[TechBranch.SOCIETY.ordinal] - 3) * 1f
         t += sim.dev.builtIndex(n, a)
+        if (a == Area.ENVIRONMENT && sim.unitedNations.inClimateDeal(n.id)) t += 5f
         if (a == Area.SECURITY) t -= occupiedFraction(n.id) * 30f
         return t.coerceIn(0f, 100f)
     }

@@ -6,6 +6,7 @@ import kotlin.math.min
 
 class Politics(private val sim: Sim) {
     private val game get() = sim.game
+    val campaigns = Campaigns(sim)
 
     fun lawGroup(n: Nation, g: Group): Float =
         n.laws.sumOf { (Content.law(it)?.groups?.get(g) ?: 0f).toDouble() }.toFloat()
@@ -59,6 +60,7 @@ class Politics(private val sim: Sim) {
         } else n.warExhaustion *= 0.85f
         n.casualtiesMonth = 0f
 
+        if (n.id == game.player) campaigns.monthly(n)
         elections(n)
         crises(n)
         n.stability = n.stability.coerceIn(0f, 100f)
@@ -67,7 +69,16 @@ class Politics(private val sim: Sim) {
 
     private fun sigmoid(x: Float) = 1f / (1f + exp(-x))
 
-    fun electionChance(n: Nation) = sigmoid((n.approval - 45f) / 7f)
+    fun electionChance(n: Nation): Float {
+        val boost = if (n.id == game.player) game.campaign.boost else 0f
+        return sigmoid((n.approval + boost - 45f) / 7f)
+    }
+
+    /** Percentual de votos estimado do governo. */
+    fun voteShare(n: Nation): Float {
+        val boost = if (n.id == game.player) game.campaign.boost else 0f
+        return (50f + (n.approval + boost - 45f) * 0.6f).coerceIn(15f, 85f)
+    }
 
     private fun elections(n: Nation) {
         if (!n.regime.elections || n.nextElection < 0) return
@@ -77,8 +88,14 @@ class Politics(private val sim: Sim) {
         n.nextElection = game.day + 365 * 4
         val win = sim.chance(electionChance(n).toDouble())
         if (!isPlayer) return
+        // votos coerentes com o resultado (a chance decide, a porcentagem acompanha)
+        var share = voteShare(n) + (sim.randf() - 0.5f) * 4f
+        share = if (win) share.coerceIn(50.3f, 85f) else share.coerceIn(15f, 49.7f)
+        val opp = game.campaign.opponent.ifEmpty { campaigns.opponentName() }
+        game.election = ElectionResult(game.day, share, win, opp)
+        campaigns.reset()
         if (win) {
-            sim.feed("vote", "Você foi reeleito com ${(50 + (n.approval - 45f) / 2f).toInt().coerceIn(51, 85)}% dos votos", 1)
+            sim.feed("vote", "Você foi reeleito com ${Fmt.one(share)}% dos votos contra $opp", 1)
             n.politicalCapital = min(100f, n.politicalCapital + 20f)
         } else if (Defeat.ELECTION in game.settings.defeats) {
             game.gameOver = GameOver(false, "Você perdeu a eleição")
@@ -213,5 +230,131 @@ class Politics(private val sim: Sim) {
         sim.feed("flag", "Novo regime: ${r.label}", 1)
         sim.touch()
         return null
+    }
+}
+
+/** Campanha eleitoral do jogador nos 6 meses antes da eleição, e as promessas feitas nela. */
+class Campaigns(private val sim: Sim) {
+    private val game get() = sim.game
+    private val c get() = game.campaign
+
+    fun active(n: Nation = sim.player): Boolean =
+        n.id == game.player && n.regime.elections && game.settings.elections && n.nextElection > game.day && n.nextElection - game.day <= 180
+
+    fun daysLeft(n: Nation = sim.player) = (n.nextElection - game.day).coerceAtLeast(0)
+
+    private val first = listOf("Ricardo", "Marta", "Fernando", "Luíza", "Antônio", "Cláudia", "Roberto", "Sônia", "Henrique", "Teresa", "Márcio", "Regina")
+    private val last = listOf("Valente", "Correia", "Andrade", "Fontes", "Barreto", "Moraes", "Peixoto", "Sales", "Rangel", "Campos")
+    fun opponentName() = "${sim.pick(first)} ${sim.pick(last)}"
+
+    fun rallyCost(n: Nation) = game.natGdp(n.id) * 0.0004
+    fun adsCost(n: Nation) = game.natGdp(n.id) * 0.0010
+
+    fun monthly(n: Nation) {
+        if (active(n) && c.opponent.isEmpty()) {
+            c.opponent = opponentName()
+            sim.feed("vote", "Campanha aberta: ${c.opponent} é o candidato da oposição", 1)
+        }
+        // a empolgação da campanha esfria aos poucos
+        if (c.boost > 0f) c.boost *= 0.92f
+        checkPromises(n)
+    }
+
+    fun rally(g: Group): String? {
+        val n = sim.player
+        if (!active(n)) return "A campanha começa 6 meses antes da eleição"
+        if (game.day - c.lastRallyDay < 20) return "Próximo comício em ${20 - (game.day - c.lastRallyDay)} dias"
+        val cost = rallyCost(n)
+        if (n.treasury < cost) return "Tesouro insuficiente"
+        n.treasury -= cost
+        c.lastRallyDay = game.day; c.rallies++
+        n.groupMods[g.ordinal] += 4f
+        c.boost += 1.5f
+        sim.feed("people", "Comício para ${g.label.lowercase()} lotou a praça", 1)
+        sim.touch(); return null
+    }
+
+    fun ads(): String? {
+        val n = sim.player
+        if (!active(n)) return "A campanha começa 6 meses antes da eleição"
+        if (c.adsDone >= 3) return "Limite de 3 campanhas na TV"
+        val cost = adsCost(n)
+        if (n.treasury < cost) return "Tesouro insuficiente"
+        n.treasury -= cost
+        c.adsDone++
+        c.boost += 2f
+        for (g in Group.entries) n.groupMods[g.ordinal] += 1f
+        sim.touch(); return null
+    }
+
+    /** Debate na TV: arriscado. Retorna o texto do resultado. */
+    fun debate(): String {
+        val n = sim.player
+        if (!active(n)) return "A campanha começa 6 meses antes da eleição"
+        if (c.debateDone) return "O debate já aconteceu"
+        c.debateDone = true
+        val chance = 0.35 + n.approval / 200.0 + n.index[Area.EDUCATION.ordinal] / 500.0
+        val won = sim.chance(chance)
+        return if (won) {
+            c.boost += 4f
+            sim.feed("victory", "Você venceu o debate contra ${c.opponent}", 1)
+            "Você venceu o debate: +4 na intenção de voto"
+        } else {
+            c.boost -= 3f
+            sim.feed("defeat", "${c.opponent} levou a melhor no debate", 2)
+            "Você perdeu o debate: −3 na intenção de voto"
+        }.also { sim.touch() }
+    }
+
+    fun promise(p: Promise): String? {
+        val n = sim.player
+        if (!active(n)) return "Promessas só durante a campanha"
+        if (c.promises.count { !it.resolved } >= 3) return "No máximo 3 promessas"
+        if (c.promises.any { it.promise == p && !it.resolved }) return "Promessa já feita"
+        c.promises += PromiseMade(p, game.day, metric(n, p))
+        n.groupMods[p.group.ordinal] += 10f
+        c.boost += 1f
+        sim.feed("vote", "Promessa de campanha: ${p.label}", 1)
+        sim.touch(); return null
+    }
+
+    fun metric(n: Nation, p: Promise): Float = when (p) {
+        Promise.HEALTH -> n.index[Area.HEALTH.ordinal]
+        Promise.JOBS -> n.unemployment
+        Promise.EDUCATION -> n.index[Area.EDUCATION.ordinal]
+        Promise.NO_TAX -> n.tax
+        Promise.ARMY -> n.shares[Area.DEFENSE.ordinal]
+        Promise.ORDER -> n.index[Area.SECURITY.ordinal]
+    }
+
+    fun kept(n: Nation, pm: PromiseMade): Boolean {
+        val now = metric(n, pm.promise)
+        return when (pm.promise) {
+            Promise.HEALTH, Promise.EDUCATION, Promise.ORDER -> now >= pm.baseline + 3f
+            Promise.JOBS -> now <= pm.baseline - 1f
+            Promise.NO_TAX -> now <= pm.baseline + 0.005f
+            Promise.ARMY -> now >= pm.baseline - 0.0005f
+        }
+    }
+
+    /** Um ano depois de prometer, o povo cobra. */
+    private fun checkPromises(n: Nation) {
+        for (pm in c.promises) {
+            if (pm.resolved || game.day - pm.day < 365) continue
+            pm.resolved = true
+            if (kept(n, pm)) {
+                n.groupMods[pm.promise.group.ordinal] += 6f
+                sim.feed("victory", "Promessa cumprida: ${pm.promise.label}", 1)
+            } else {
+                n.groupMods[pm.promise.group.ordinal] -= 12f
+                n.stability -= 3f
+                sim.feed("defeat", "Promessa quebrada: ${pm.promise.label}", 3)
+            }
+        }
+        c.promises.removeAll { it.resolved && game.day - it.day > 400 }
+    }
+
+    fun reset() {
+        c.rallies = 0; c.lastRallyDay = -999; c.debateDone = false; c.adsDone = 0; c.boost = 0f; c.opponent = ""
     }
 }
