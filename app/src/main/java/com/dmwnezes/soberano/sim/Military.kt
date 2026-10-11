@@ -590,6 +590,70 @@ class Military(private val sim: Sim) {
         return n
     }
 
+    /** Províncias que recebem tropas na divisão igual (fronteira primeiro, depois as mais populosas). */
+    fun distributionTargets(owner: Int, borderOnly: Boolean): List<Int> {
+        val mine = game.owner.indices.filter { game.owner[it] == owner && game.controller[it] == owner }
+        val border = mine.filter { p -> world.provinces[p].neighbors.any { game.owner[it] != owner } }
+        val pool = if (borderOnly) border else border.sortedByDescending { game.provPop[it] } + (mine - border.toSet()).sortedByDescending { game.provPop[it] }
+        // só onde dá para chegar por terra a partir da maior tropa parada
+        val from = game.armies.filter { it.owner == owner && it.domain == Domain.LAND && !it.battle }.maxByOrNull { it.divisions() }?.province ?: return emptyList()
+        return pool.filter { it == from || landPath(owner, from, it, false) != null }
+    }
+
+    /**
+     * Divide igualmente as tropas terrestres paradas entre as províncias: com 100 divisões e 10 províncias,
+     * 10 em cada. Cada destacamento marcha da tropa mais próxima. Retorna (divisões, províncias).
+     */
+    fun distributeEvenly(owner: Int, borderOnly: Boolean): Pair<Int, Int> {
+        val sources = game.armies.filter { it.owner == owner && it.domain == Domain.LAND && !it.battle && !it.moving }.toMutableList()
+        val targets = distributionTargets(owner, borderOnly)
+        if (sources.isEmpty() || targets.isEmpty()) return 0 to 0
+        val landTypes = UnitType.of(Domain.LAND)
+        // unidades inteiras por tipo (sobra fracionada fica na tropa de origem)
+        val totals = IntArray(UnitType.count)
+        for (t in landTypes) totals[t.ordinal] = sources.sumOf { it.units[t.ordinal].toDouble() }.toInt()
+        val totalDiv = landTypes.sumOf { totals[it.ordinal] }
+        if (totalDiv == 0) return 0 to 0
+        val n = minOf(targets.size, totalDiv)
+        val dests = targets.take(n)
+        // cota de cada província por tipo: divisão inteira, sobras para as primeiras da lista
+        val quota = Array(n) { IntArray(UnitType.count) }
+        var cursor = 0
+        for (t in landTypes) {
+            val tot = totals[t.ordinal]
+            val base = tot / n
+            var rest = tot % n
+            for (i in 0 until n) quota[i][t.ordinal] = base
+            // as sobras giram pelas províncias para não lotar sempre as mesmas
+            while (rest > 0) { quota[cursor % n][t.ordinal]++; cursor++; rest-- }
+        }
+        for ((i, dest) in dests.withIndex()) {
+            for (t in landTypes) {
+                var need = quota[i][t.ordinal].toFloat()
+                // tira das tropas mais próximas do destino
+                for (src in sources.filter { it.units[t.ordinal] >= 1f }.sortedBy { world.distanceKm(it.province, dest) }) {
+                    if (need <= 0f) break
+                    val take = minOf(need, kotlin.math.floor(src.units[t.ordinal]))
+                    if (take <= 0f) continue
+                    src.units[t.ordinal] -= take
+                    need -= take
+                    val det = game.armies.firstOrNull { it.owner == owner && it.province == src.province && it.domain == Domain.LAND && it.target == dest && it !in sources }
+                        ?: newArmy(owner, src.province, Domain.LAND).also { it.target = dest; it.morale = src.morale }
+                    det.units[t.ordinal] += take
+                }
+            }
+        }
+        // destacamentos marcham; os que já estão no destino ficam
+        for (a in game.armies.toList()) if (a.owner == owner && a.target >= 0 && a.domain == Domain.LAND) {
+            val dest = a.target
+            a.target = -1
+            if (a.province != dest) order(a, dest)
+        }
+        game.armies.removeAll { it.owner == owner && it.domain == Domain.LAND && !it.alive() }
+        sim.touch()
+        return totalDiv to n
+    }
+
     /** Junta exércitos parados do mesmo dono na mesma província (reunião automática do jogador). */
     fun dailyAutoMerge() {
         if (!game.autoMerge) return

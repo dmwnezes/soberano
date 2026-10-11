@@ -4,6 +4,7 @@ import com.dmwnezes.soberano.sim.Domain
 import com.dmwnezes.soberano.sim.Fmt
 import com.dmwnezes.soberano.sim.Resource
 import com.dmwnezes.soberano.sim.TreatyType
+import com.dmwnezes.soberano.sim.UnitType
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
@@ -88,5 +89,29 @@ class FeaturesTest {
         val w = sim.diplomacy.declareWar(mex.id, gtm.id)!!
         assertTrue(bra.id in w.defenders)
         assertTrue(sim.diplomacy.reasons(me.id, mex.id).isNotEmpty())
+    }
+
+    @Test fun distributeEvenlyAcrossProvinces() {
+        val sim = TestWorld.newSim("BRA", seed = 45)
+        val g = sim.game
+        val me = sim.player
+        g.autoMerge = true
+        // 100 divisões de infantaria numa tropa só
+        val main = sim.armiesOf(me.id).first { it.domain == Domain.LAND }
+        for (t in UnitType.of(Domain.LAND)) main.units[t.ordinal] = 0f
+        main.units[UnitType.INFANTRY.ordinal] = 100f
+        for (a in sim.armiesOf(me.id).filter { it.domain == Domain.LAND && it !== main }) g.armies.remove(a)
+        val (divs, provs) = sim.military.distributeEvenly(me.id, borderOnly = false)
+        println("dividiu $divs divisões em $provs províncias")
+        assertEquals(100, divs)
+        assertTrue(provs >= 20)
+        repeat(400) { sim.advanceDay() }
+        g.events.clear()
+        val targets = sim.military.distributionTargets(me.id, false).take(provs)
+        val per = targets.map { p -> sim.armiesAt(p).filter { it.owner == me.id && it.domain == Domain.LAND }.sumOf { it.count(UnitType.INFANTRY).toDouble() } }
+        println("por província: $per")
+        val base = 100 / provs
+        // reservistas podem somar na capital; o resto fica com a cota
+        assertTrue(per.count { it >= base } >= provs - 1)
     }
 }

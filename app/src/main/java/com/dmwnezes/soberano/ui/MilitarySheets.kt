@@ -69,6 +69,7 @@ private fun MilTroops(c: GameController) {
     val sim = c.sim
     val armies = sim.armiesOf(me.id)
     var gather by remember { mutableStateOf(false) }
+    var spread by remember { mutableStateOf(false) }
     Box(Modifier.fillMaxSize()) {
         SheetBody {
             Spacer(Modifier.height(8.dp))
@@ -91,6 +92,8 @@ private fun MilTroops(c: GameController) {
                     c.say(if (n > 0) "$n grupos juntados" else "Nada para juntar", if (n > 0) 1 else 0, "military")
                 }
             }
+            Spacer(Modifier.height(8.dp))
+            Btn("Dividir igualmente pelas províncias", Modifier.fillMaxWidth(), BtnKind.GHOST, Icons.Rounded.GridView) { spread = true }
             ToggleRow("Juntar automaticamente", g.autoMerge, Icons.Rounded.AutoMode, "Exércitos parados no mesmo lugar viram um só") { g.autoMerge = it; c.refresh() }
 
             SectionTitle("Exércitos, frotas e alas")
@@ -119,6 +122,52 @@ private fun MilTroops(c: GameController) {
             }
         }
         if (gather) GatherDialog(c) { gather = false }
+        if (spread) SpreadDialog(c) { spread = false }
+    }
+}
+
+/** Divide as divisões paradas igualmente entre as províncias (todas ou só a fronteira). */
+@Composable
+private fun SpreadDialog(c: GameController, onClose: () -> Unit) {
+    val g = c.game
+    val sim = c.sim
+    val me = g.player
+    var borderOnly by remember { mutableStateOf(false) }
+    val idle = sim.armiesOf(me).filter { it.domain == Domain.LAND && !it.battle && !it.moving }
+    val divs = UnitType.of(Domain.LAND).sumOf { t -> idle.sumOf { it.units[t.ordinal].toDouble() }.toInt() }
+    val targets = remember(borderOnly, c.tick) { sim.military.distributionTargets(me, borderOnly) }
+    val n = minOf(targets.size, divs)
+    val each = if (n > 0) divs / n else 0
+    val extra = if (n > 0) divs % n else 0
+    Overlay(onClose) {
+        Text("Dividir igualmente", style = Type.title.copy(fontSize = 22.sp), color = Ink.text)
+        Spacer(Modifier.height(6.dp))
+        Text("As tropas terrestres paradas se espalham pelas províncias, cada parte saindo da tropa mais próxima.", style = Type.small, color = Ink.muted)
+        Spacer(Modifier.height(12.dp))
+        Segmented(listOf(false, true), borderOnly, { if (it) "Só fronteira" else "Todas as províncias" }) { borderOnly = it }
+        Spacer(Modifier.height(14.dp))
+        Panel(Modifier.fillMaxWidth()) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Cell("Divisões", "$divs")
+                Text("÷", style = Type.heading, color = Ink.muted, modifier = Modifier.padding(horizontal = 6.dp))
+                Cell("Províncias", "$n")
+                Text("=", style = Type.heading, color = Ink.muted, modifier = Modifier.padding(horizontal = 6.dp))
+                Cell("Em cada", if (extra > 0) "$each a ${each + 1}" else "$each", Ink.brass)
+            }
+        }
+        if (divs < targets.size && divs > 0) Text("Há menos divisões que províncias: ${targets.size - divs} ficam sem tropa (as menos importantes).",
+            style = Type.small, color = Ink.amber, modifier = Modifier.padding(top = 8.dp))
+        if (targets.isNotEmpty() && targets.size < sim.provincesOf(me).size && !borderOnly)
+            Text("Províncias que só se alcançam por mar ficam de fora.", style = Type.small, color = Ink.faint, modifier = Modifier.padding(top = 6.dp))
+        Spacer(Modifier.height(16.dp))
+        Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+            Btn("Cancelar", Modifier.weight(1f), BtnKind.GHOST) { onClose() }
+            Btn("Dividir", Modifier.weight(1f), BtnKind.PRIMARY, Icons.Rounded.GridView, enabled = n > 0) {
+                val (d, p) = sim.military.distributeEvenly(me, borderOnly)
+                c.say(if (p > 0) "$d divisões espalhadas por $p províncias" else "Nenhuma tropa parada para dividir", if (p > 0) 1 else 2, "military")
+                onClose(); c.refresh()
+            }
+        }
     }
 }
 
