@@ -88,9 +88,13 @@ class ScreensRenderTest {
         rule.runOnIdle { c.lawEditor = false; c.lawInfo = "imposto_fortunas"; c.refresh() }
         shot("08_lei_info")
         rule.runOnIdle { c.lawInfo = null; c.refresh() }
+        rule.runOnIdle { repeat(70) { sim.advanceDay() }; sim.game.events.clear(); sim.game.proposals.clear() }
         for ((i, t) in Tab.entries.withIndex()) {
-            rule.runOnIdle { c.selArmy = -1; c.selProvince = -1; c.tab = t; c.refresh() }
-            shot("1${i}_${t.name.lowercase()}")
+            val subs = if (t == Tab.DIPLOMACY) 1 else 4
+            for (k in 0 until subs) {
+                rule.runOnIdle { c.selArmy = -1; c.selProvince = -1; c.tab = t; c.subTab[t] = k; c.refresh() }
+                shot("1${i}${k}_${t.name.lowercase()}")
+            }
         }
         rule.runOnIdle { c.tab = Tab.DIPLOMACY; c.focusNation = sim.game.nations.first { it.code == "ARG" }.id; c.refresh() }
         shot("16_diplomacia_argentina")

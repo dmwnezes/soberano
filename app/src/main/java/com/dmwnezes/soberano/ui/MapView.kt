@@ -608,6 +608,7 @@ fun WorldMapView(
         val sc = camera.scale; camera.ox; camera.oy
         if (sc <= 0f) return@Canvas
         val key = MapColors.key(sim, mode, focusNation)
+        if (lastKey.size > 4) { lastKey.keys.retainAll(setOf(renderer)); lastColors.keys.retainAll(setOf(renderer)) }
         val (fills, stripes) = if (key != lastKey[renderer]) MapColors.compute(sim, mode, focusNation).also { lastColors[renderer] = it; lastKey[renderer] = key }
         else lastColors[renderer]!!
         renderer.ensureCache(key, fills, stripes, sim)

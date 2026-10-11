@@ -77,6 +77,7 @@ class Diplomacy(private val sim: Sim) {
                     base += when (it) {
                         TreatyType.TRADE -> 10f; TreatyType.ALLIANCE -> 25f; TreatyType.PASSAGE -> 8f
                         TreatyType.NON_AGGRESSION -> 5f; TreatyType.SANCTION -> -20f; TreatyType.EMBARGO -> -30f
+                        TreatyType.GUARANTEE -> 12f
                     }
                 }
                 val r = game.rel(a, b)
@@ -102,6 +103,10 @@ class Diplomacy(private val sim: Sim) {
                     game.addRel(na.id, o, -sim.randf() * 2.5f * na.personality.aggression * game.settings.aiAggression)
             }
         }
+        // ministro das Relações Exteriores melhora devagar as relações do jogador
+        val fb = sim.dev.foreignBonus()
+        if (fb != 0f) for (o in game.nations) if (o.alive && o.id != game.player && !sim.atWar(game.player, o.id) && game.rel(game.player, o.id) > -50f)
+            game.addRel(game.player, o.id, fb * 0.3f)
         game.proposals.removeAll { game.day - it.day > 60 }
     }
 
@@ -224,6 +229,12 @@ class Diplomacy(private val sim: Sim) {
         // aliados do alvo entram (blocos militares e alianças)
         for (o in game.nations) if (o.alive && o.id != attacker && o.id != target) {
             if (sim.allied(o.id, target) && !sim.allied(o.id, attacker) && game.rel(o.id, target) > 20f) defenders += o.id
+        }
+        // quem garantiu a independência do alvo entra também
+        for (t in game.treaties) if (t.type == TreatyType.GUARANTEE && t.b == target && t.a != attacker && t.a !in defenders &&
+            sim.nation(t.a).alive && !sim.allied(t.a, attacker)) {
+            defenders += t.a
+            if (t.a == game.player) sim.feed("shield", "Você garantiu ${sim.nation(target).name}: entrou na guerra", 3)
         }
         // aliados do agressor só entram se gostarem muito dele e odiarem o alvo
         for (o in game.nations) if (o.alive && o.id !in attackers && o.id !in defenders) {
@@ -435,5 +446,92 @@ class Diplomacy(private val sim: Sim) {
         } else "A missão falhou sem deixar rastros"
         sim.touch()
         return result
+    }
+
+    // ------------------------------------------------------------- diplomacia avançada
+
+    /** Por que [a] e [b] se gostam ou não: lista de (motivo, peso). */
+    fun reasons(a: Int, b: Int): List<Pair<String, Float>> {
+        val out = ArrayList<Pair<String, Float>>()
+        val na = sim.nation(a); val nb = sim.nation(b)
+        if (sim.atWar(a, b)) out += "Estão em guerra" to -60f
+        out += (if (na.regime.democratic == nb.regime.democratic) "Regimes parecidos" to 10f else "Regimes diferentes" to -10f)
+        for (bl in game.blocs) if (a in bl.members && b in bl.members) out += "Juntos em ${bl.name}" to 15f
+        for (t in game.treaties) {
+            val pair = (t.a == a && t.b == b) || (t.a == b && t.b == a)
+            if (!pair) continue
+            val v = when (t.type) {
+                TreatyType.TRADE -> 10f; TreatyType.ALLIANCE -> 25f; TreatyType.PASSAGE -> 8f; TreatyType.NON_AGGRESSION -> 5f
+                TreatyType.SANCTION -> -20f; TreatyType.EMBARGO -> -30f; TreatyType.GUARANTEE -> 12f
+            }
+            val who = when {
+                !t.type.bilateral && t.a == a -> " (sua)"
+                !t.type.bilateral -> " (deles)"
+                else -> ""
+            }
+            out += "${t.type.label}$who" to v
+        }
+        if (b in sim.ai.neighborsOf(a)) {
+            val tension = nb.personality.aggression >= 0.7f && sim.landPower(b) > sim.landPower(a) * 1.25
+            out += (if (tension) "Vizinho ambicioso e mais forte" to -10f else "Vizinhos" to -2f)
+        }
+        // inimigos em comum aproximam
+        val common = game.nations.count { o -> o.alive && o.id != a && o.id != b && game.rel(a, o.id) < -50f && game.rel(b, o.id) < -50f }
+        if (common > 0) out += "Inimigos em comum ($common)" to 6f * common
+        val explained = out.sumOf { it.second.toDouble() }.toFloat()
+        val history = game.rel(a, b) - explained
+        if (kotlin.math.abs(history) >= 5f) out += (if (history > 0) "Histórico de amizade" else "Histórico de rivalidade") to history
+        return out.sortedByDescending { kotlin.math.abs(it.second) }
+    }
+
+    /** Exige uma província de [to]; aceitam se forem muito mais fracos. Retorna mensagem; true se aceitou. */
+    fun ultimatum(from: Int, to: Int, province: Int): Pair<Boolean, String> {
+        if (game.owner[province] != to) return false to "A província não é deles"
+        val mine = sim.landPower(from)
+        var theirs = sim.landPower(to)
+        for (o in game.nations) if (o.alive && o.id != to && sim.allied(o.id, to) && !sim.allied(o.id, from)) theirs += sim.landPower(o.id) * 0.4
+        val name = sim.world.provinces[province].name
+        return if (mine > theirs * 2.5 && game.rel(from, to) > -70f) {
+            transfer(province, from)
+            game.addRel(from, to, -25f)
+            for (o in game.nations) if (o.alive && o.id != from && o.id != to) game.addRel(from, o.id, -2f)
+            evacuateIllegalArmies()
+            sim.feed("flag", "${sim.nation(to).name} entregou $name", if (from == game.player) 1 else 2, province)
+            sim.touch()
+            true to "Aceitaram: $name agora é sua"
+        } else {
+            game.addRel(from, to, -15f)
+            sim.touch()
+            false to "Recusaram. Para tomar $name, só pela força"
+        }
+    }
+
+    /** Pede a um aliado que entre na guerra [w] ao lado de [from]. */
+    fun callToArms(w: War, from: Int, ally: Int): String? {
+        if (w.involves(ally)) return "Já está na guerra"
+        if (!sim.allied(from, ally)) return "Precisa ser aliado"
+        val enemies = if (w.side(from) == 1) w.defenders else w.attackers
+        if (enemies.any { sim.allied(ally, it) }) return "Também é aliado do inimigo"
+        val r = game.rel(from, ally)
+        val pers = sim.nation(ally).personality
+        val ok = r > 45f + (if (pers == Personality.PACIFIC) 25f else 0f) - (if (pers.aggression > 1f) 15f else 0f)
+        if (!ok) { game.addRel(from, ally, -5f); return "Recusaram (relação ${r.toInt()})" }
+        joinWar(w, ally, w.side(from))
+        return null
+    }
+
+    fun joinWar(w: War, n: Int, side: Int) {
+        if (w.involves(n)) return
+        if (side == 1) w.attackers += n else w.defenders += n
+        game.warCache = null
+        val enemies = if (side == 1) w.defenders else w.attackers
+        for (e in enemies) game.setRel(n, e, min(game.rel(n, e), -70f))
+        sim.feed("war", "${sim.nation(n).name} entrou na ${w.name}", if (w.involves(game.player)) 2 else 0)
+        sim.touch()
+    }
+
+    /** Fronteira de [a] com [b]: províncias de b vizinhas de a. */
+    fun borderProvinces(a: Int, b: Int): List<Int> = game.owner.indices.filter { p ->
+        game.owner[p] == b && sim.world.provinces[p].neighbors.any { game.owner[it] == a }
     }
 }

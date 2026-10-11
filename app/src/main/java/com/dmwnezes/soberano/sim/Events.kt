@@ -101,6 +101,7 @@ class Events(private val sim: Sim) {
             e.key == "infl" -> -v
             e.key == "cap" -> v * 0.3f
             e.key == "morale" -> v * 20
+            e.key.startsWith("price:") -> 0f
             else -> 0f
         }
     }
@@ -127,6 +128,7 @@ class Events(private val sim: Sim) {
             e.key == "cap" -> n.politicalCapital = (n.politicalCapital + v).coerceIn(0f, 100f)
             e.key.startsWith("g:") -> Group.valueOf(e.key.substring(2)).let { n.groupMods[it.ordinal] += v }
             e.key.startsWith("i:") -> Area.valueOf(e.key.substring(2)).let { n.index[it.ordinal] = (n.index[it.ordinal] + v).coerceIn(0f, 100f) }
+            e.key.startsWith("price:") -> Resource.valueOf(e.key.substring(6)).let { game.prices[it.ordinal] = (game.prices[it.ordinal] * (1f + v)).coerceIn(0.4f, 2.5f) }
         }
     }
 
@@ -143,6 +145,7 @@ class Events(private val sim: Sim) {
             e.key == "tech" -> "$sign${abs.toInt()} pesquisa"
             e.key == "morale" -> "$sign${(abs * 100).toInt()}% moral"
             e.key == "infl" -> "$sign${Fmt.one(abs)} inflação"
+            e.key.startsWith("price:") -> "${Resource.valueOf(e.key.substring(6)).label} $sign${(abs * 100).toInt()}% preço"
             else -> "$sign${abs.toInt()} ${keyName(e.key)}"
         }
     }

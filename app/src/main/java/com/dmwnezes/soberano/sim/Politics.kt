@@ -23,7 +23,7 @@ class Politics(private val sim: Sim) {
             Group.YOUTH -> 0.25f * (idx(Area.EDUCATION) - 50f) + 0.15f * (idx(Area.ENVIRONMENT) - 50f) - 1.2f * (n.unemployment - 7f)
             Group.RETIREES -> 0.35f * (idx(Area.HEALTH) - 50f) - 1.5f * (n.inflation - 3f) + 0.15f * (idx(Area.SECURITY) - 50f)
         }
-        t += lawGroup(n, g) + n.groupMods[g.ordinal] - n.warExhaustion * 20f
+        t += lawGroup(n, g) + n.groupMods[g.ordinal] - n.warExhaustion * 20f + sim.dev.builtGroups(n, g)
         return t.coerceIn(0f, 100f)
     }
 
@@ -45,7 +45,7 @@ class Politics(private val sim: Sim) {
 
         val lawStab = n.laws.sumOf { (Content.law(it)?.stability ?: 0f).toDouble() }.toFloat()
         val occ = sim.economy.occupiedFraction(n.id)
-        val stTarget = 0.45f * n.approval + 0.25f * n.index[Area.SECURITY.ordinal] + 22f + lawStab -
+        val stTarget = 0.45f * n.approval + 0.25f * n.index[Area.SECURITY.ordinal] + 22f + lawStab + sim.dev.builtStability(n) -
             n.warExhaustion * 25f - occ * 30f - n.corruption * 0.1f
         n.stability += (stTarget.coerceIn(0f, 100f) - n.stability) * 0.12f
 
@@ -126,7 +126,7 @@ class Politics(private val sim: Sim) {
         }
         // falência
         val gdp = game.natGdp(n.id)
-        if (gdp > 0 && n.debt > gdp * 2.5) {
+        if (gdp > 0 && (gdp >= 3.0 || isPlayer) && n.debt > gdp * 2.5) {
             if (isPlayer && Defeat.BANKRUPTCY in d) { game.gameOver = GameOver(false, "Falência: o país não consegue pagar a dívida"); return }
             n.debt *= 0.5
             for (i in game.owner.indices) if (game.owner[i] == n.id) game.provGdp[i] *= 0.92

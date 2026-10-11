@@ -1,0 +1,359 @@
+package com.dmwnezes.soberano.sim
+
+import kotlin.math.max
+import kotlin.math.min
+import kotlin.math.sqrt
+
+/** Projeto nacional: obra cara e demorada com bônus permanente. */
+class ProjectDef(
+    val id: String,
+    val name: String,
+    val icon: String,
+    val desc: String,
+    /** custo em fração do PIB anual */
+    val cost: Float,
+    val months: Int,
+    val index: Map<Area, Float> = emptyMap(),
+    val growth: Float = 0f,
+    val stability: Float = 0f,
+    val groups: Map<Group, Float> = emptyMap(),
+    val unitDiscount: Float = 0f,
+    val research: Float = 0f,
+    val needsCoast: Boolean = false,
+    val needsTech: Pair<TechBranch, Int>? = null,
+)
+
+/**
+ * Sistemas de desenvolvimento: recursos naturais, ministros, projetos nacionais,
+ * reservistas automáticos e histórico mensal.
+ */
+class Development(private val sim: Sim) {
+    private val game get() = sim.game
+    private val world get() = sim.world
+
+    // ============================================================ recursos naturais
+
+    companion object {
+        /** Produção anual aproximada em US$ bi (preço normal) dos maiores produtores. */
+        val OIL = mapOf(
+            "USA" to 260f, "SAU" to 230f, "RUS" to 220f, "CAN" to 110f, "IRQ" to 95f, "CHN" to 90f, "ARE" to 80f,
+            "IRN" to 75f, "BRA" to 70f, "KWT" to 60f, "KAZ" to 40f, "NOR" to 40f, "MEX" to 38f, "QAT" to 35f,
+            "NGA" to 32f, "DZA" to 30f, "LBY" to 25f, "AGO" to 24f, "OMN" to 22f, "VEN" to 20f, "GBR" to 18f,
+            "AZE" to 15f, "COL" to 15f, "IDN" to 14f, "MYS" to 12f, "EGY" to 12f, "ARG" to 12f, "ECU" to 10f,
+            "GUY" to 10f, "IND" to 15f, "TKM" to 10f, "SDS" to 4f, "GAB" to 4f, "COG" to 6f, "TCD" to 3f,
+        )
+        val MINERALS = mapOf(
+            "AUS" to 150f, "CHN" to 160f, "BRA" to 70f, "CHL" to 55f, "RUS" to 60f, "ZAF" to 45f, "PER" to 35f,
+            "CAN" to 45f, "USA" to 55f, "COD" to 30f, "IND" to 40f, "IDN" to 35f, "KAZ" to 20f, "MEX" to 20f,
+            "ZMB" to 12f, "GIN" to 8f, "MNG" to 10f, "UKR" to 12f, "SWE" to 8f, "BOL" to 6f, "PHL" to 8f,
+            "NAM" to 4f, "BWA" to 6f, "GHA" to 8f, "TUR" to 8f, "IRN" to 8f, "MRT" to 3f, "NCL" to 2f,
+        )
+        val FOOD = mapOf(
+            "CHN" to 230f, "IND" to 160f, "USA" to 190f, "BRA" to 120f, "IDN" to 60f, "RUS" to 55f, "ARG" to 45f,
+            "FRA" to 45f, "UKR" to 30f, "CAN" to 40f, "AUS" to 30f, "THA" to 28f, "VNM" to 25f, "MEX" to 30f,
+            "TUR" to 30f, "NGA" to 35f, "PAK" to 30f, "DEU" to 30f, "ESP" to 28f, "ITA" to 28f, "EGY" to 20f,
+            "BGD" to 22f, "ETH" to 15f, "PHL" to 15f, "IRN" to 15f, "POL" to 15f, "NLD" to 15f, "MYS" to 10f,
+            "NZL" to 12f, "COL" to 12f, "PRY" to 8f, "URY" to 6f, "KAZ" to 8f, "ROU" to 8f, "HUN" to 6f,
+        )
+    }
+
+    /** Consumo anual por US$ bi de PIB, calibrado na partida para a produção mundial bater com o consumo. */
+    private val intensity: FloatArray by lazy {
+        val worldGdp = game.nations.sumOf { game.natGdp(it.id) }.coerceAtLeast(1.0)
+        FloatArray(Resource.entries.size) { r -> (provRes[r].sum() / worldGdp).toFloat() }
+    }
+
+    /** Produção anual de cada recurso por província (fixa: muda de dono com a província). */
+    val provRes: Array<FloatArray> by lazy {
+        val tables = listOf(OIL, MINERALS, FOOD)
+        val out = Array(Resource.entries.size) { FloatArray(world.provinces.size) }
+        for ((r, table) in tables.withIndex()) {
+            for ((code, total) in table) {
+                val c = world.byCode[code] ?: continue
+                val ids = world.provinces.filter { it.country == c.index }
+                // alimentos seguem área e população; petróleo e minérios seguem a área
+                val w = ids.map { p -> if (r == 2) p.areaKm2 * 0.5 + p.population * 0.002 else p.areaKm2.toDouble() }
+                val tot = w.sum().coerceAtLeast(1.0)
+                ids.forEachIndexed { k, p -> out[r][p.id] = (total * w[k] / tot).toFloat() }
+            }
+        }
+        out
+    }
+
+    fun production(n: Int, r: Resource): Float {
+        var s = 0f
+        val arr = provRes[r.ordinal]
+        for (i in game.owner.indices) if (game.owner[i] == n && game.controller[i] == n) s += arr[i]
+        return s
+    }
+
+    fun consumption(n: Int, r: Resource): Float = (game.natGdp(n) * intensity[r.ordinal]).toFloat()
+
+    /** Saldo anual de comércio de um recurso, em US$ bi ao preço atual (positivo = exporta). */
+    fun balance(n: Int, r: Resource): Float = (production(n, r) - consumption(n, r)) * game.prices[r.ordinal]
+
+    fun tradeBalance(n: Int): Float = Resource.entries.sumOf { balance(n, it).toDouble() }.toFloat()
+
+    /** Preços andam um pouco todo mês e voltam devagar ao normal. */
+    fun monthlyPrices() {
+        for (r in Resource.entries) {
+            val i = r.ordinal
+            val drift = (1f - game.prices[i]) * 0.08f + (sim.randf() - 0.5f) * 0.08f
+            game.prices[i] = (game.prices[i] + drift).coerceIn(0.4f, 2.5f)
+        }
+    }
+
+    /** Efeito mensal do comércio de recursos no caixa e no crescimento de [n]. */
+    fun monthlyTrade(n: Nation) {
+        val gdp = game.natGdp(n.id)
+        if (gdp <= 0) return
+        var bal = tradeBalance(n.id)
+        val embargoed = game.treaties.any { it.type == TreatyType.EMBARGO && it.b == n.id }
+        if (embargoed && bal > 0) bal *= 0.5f
+        // o governo fica com parte do saldo (royalties) ou paga parte do déficit (subsídios)
+        n.treasury += bal * 0.12 / 12.0
+        if (n.treasury < 0) { n.debt += -n.treasury; n.treasury = 0.0 }
+    }
+
+    fun tradeGrowth(n: Nation): Float {
+        val gdp = game.natGdp(n.id)
+        if (gdp <= 0) return 0f
+        return (tradeBalance(n.id) / gdp.toFloat() * 0.08f).coerceIn(-0.015f, 0.02f)
+    }
+
+    // ============================================================ ministros
+
+    private val firstNames = listOf("Ana", "Bruno", "Carla", "Diego", "Elisa", "Fábio", "Gabriela", "Heitor", "Isabela", "João",
+        "Karina", "Lucas", "Marina", "Nelson", "Olívia", "Paulo", "Raquel", "Sérgio", "Tatiana", "Vítor", "Helena", "Ricardo",
+        "Beatriz", "Rodrigo", "Juliana", "Marcos", "Patrícia", "Eduardo", "Camila", "Otávio")
+    private val lastNames = listOf("Almeida", "Barros", "Cardoso", "Duarte", "Esteves", "Ferraz", "Gomes", "Holanda", "Lima",
+        "Machado", "Nogueira", "Pacheco", "Queiroz", "Rocha", "Sampaio", "Teixeira", "Vasconcelos", "Xavier", "Moura", "Freitas",
+        "Bezerra", "Carvalho", "Monteiro", "Pires", "Ribeiro")
+
+    private fun randomMinister(slot: MinisterSlot): Minister {
+        val skill = 1 + sim.randInt(5)
+        val loyalty = 1 + sim.randInt(5)
+        // os muito competentes às vezes são mais corruptos
+        val corruption = (1 + sim.randInt(5) + if (skill >= 4 && sim.chance(0.3)) 1 else 0).coerceAtMost(5)
+        return Minister("${sim.pick(firstNames)} ${sim.pick(lastNames)}", slot, skill, loyalty, corruption, game.day)
+    }
+
+    fun ensureCabinet() {
+        for (slot in MinisterSlot.entries) if (game.ministers.none { it.slot == slot }) game.ministers += randomMinister(slot)
+        if (game.candidates.isEmpty()) refreshCandidates()
+    }
+
+    fun refreshCandidates() {
+        game.candidates.clear()
+        for (slot in MinisterSlot.entries) repeat(2) { game.candidates += randomMinister(slot) }
+    }
+
+    fun minister(slot: MinisterSlot): Minister? = game.ministers.firstOrNull { it.slot == slot }
+
+    /** Multiplicador da eficiência de uma área pelo ministro responsável (0,7 a 1,3). */
+    fun ministerMult(a: Area): Float {
+        val slot = when (a) {
+            Area.HEALTH -> MinisterSlot.HEALTH
+            Area.EDUCATION, Area.RESEARCH -> MinisterSlot.EDUCATION
+            Area.SECURITY -> MinisterSlot.SECURITY
+            Area.INFRA, Area.SOCIAL, Area.ENVIRONMENT -> MinisterSlot.ECONOMY
+            Area.DEFENSE -> MinisterSlot.DEFENSE
+        }
+        val m = minister(slot) ?: return 1f
+        return 0.7f + (m.skill - 1) * 0.15f
+    }
+
+    fun cabinetCorruption(): Float = game.ministers.sumOf { (it.corruption - 3).toDouble() }.toFloat() * 2f
+    fun economyBonus(): Float = (minister(MinisterSlot.ECONOMY)?.skill ?: 3).minus(3) * 0.002f
+    fun defenseDiscount(): Float = (minister(MinisterSlot.DEFENSE)?.skill ?: 3).minus(3) * 0.03f
+    fun foreignBonus(): Float = (minister(MinisterSlot.FOREIGN)?.skill ?: 3).minus(3) * 0.5f
+
+    val hireCost = 5f
+
+    fun hire(c: Minister): String? {
+        val me = sim.player
+        if (me.politicalCapital < hireCost) return "Precisa de ${hireCost.toInt()} de capital político"
+        me.politicalCapital -= hireCost
+        val old = minister(c.slot)
+        game.ministers.removeAll { it.slot == c.slot }
+        game.ministers += Minister(c.name, c.slot, c.skill, c.loyalty, c.corruption, game.day)
+        game.candidates.remove(c)
+        // demitir alguém leal irrita a base
+        if (old != null && old.loyalty >= 4) me.groupMods[Group.WORKERS.ordinal] -= 2f
+        sim.feed("person", "${c.name} assumiu ${c.slot.label}", 1)
+        sim.touch()
+        return null
+    }
+
+    /** Ministros desleais com governo fraco podem sair ou causar escândalo. */
+    private fun monthlyCabinet() {
+        val me = sim.player
+        for (m in game.ministers.toList()) {
+            if (m.loyalty <= 2 && me.approval < 40f && sim.chance(0.03)) {
+                game.ministers.remove(m)
+                game.ministers += randomMinister(m.slot)
+                me.stability -= 3f
+                sim.feed("door", "${m.name} (${m.slot.label}) renunciou criticando o governo", 2)
+            } else if (m.corruption >= 4 && sim.chance(0.015 * m.corruption)) {
+                me.groupMods[Group.YOUTH.ordinal] -= 4f
+                me.corruption += 2f
+                sim.feed("scandal", "Escândalo envolve ${m.name}, de ${m.slot.label}", 2)
+            }
+        }
+        if (game.day % 180 < 31) refreshCandidates()
+    }
+
+    // ============================================================ projetos nacionais
+
+    val projects: List<ProjectDef> = listOf(
+        ProjectDef("ferrovia", "Ferrovia nacional", "factory", "Trilhos ligando as capitais: comércio e tropas mais rápidas",
+            0.012f, 30, index = mapOf(Area.INFRA to 8f), growth = 0.003f),
+        ProjectDef("hospitais", "Rede de hospitais", "health", "Hospitais regionais em todo o país",
+            0.010f, 24, index = mapOf(Area.HEALTH to 8f), groups = mapOf(Group.RETIREES to 4f)),
+        ProjectDef("universidades", "Universidades federais", "school", "Novos campi e bolsas de pesquisa",
+            0.010f, 30, index = mapOf(Area.EDUCATION to 7f, Area.RESEARCH to 5f), groups = mapOf(Group.YOUTH to 4f)),
+        ProjectDef("usina_nuclear", "Usina nuclear", "atom", "Energia barata e limpa para a indústria",
+            0.015f, 36, index = mapOf(Area.ENVIRONMENT to 3f), growth = 0.003f, needsTech = TechBranch.NUCLEAR to 4),
+        ProjectDef("espacial", "Programa espacial", "rocket", "Satélites e foguetes próprios",
+            0.014f, 40, index = mapOf(Area.RESEARCH to 8f), research = 6f, groups = mapOf(Group.YOUTH to 3f)),
+        ProjectDef("porto", "Porto moderno", "ship", "Terminal de contêineres de classe mundial",
+            0.008f, 24, index = mapOf(Area.INFRA to 4f), growth = 0.002f, needsCoast = true),
+        ProjectDef("ciberseguranca", "Centro de cibersegurança", "shield", "Proteção contra espionagem e crimes digitais",
+            0.006f, 18, index = mapOf(Area.SECURITY to 6f)),
+        ProjectDef("defesa", "Polo da indústria de defesa", "military", "Fábricas nacionais de armamento",
+            0.012f, 30, unitDiscount = 0.10f, groups = mapOf(Group.MILITARY to 6f)),
+        ProjectDef("parques", "Parques nacionais", "leaf", "Grandes áreas de preservação",
+            0.004f, 18, index = mapOf(Area.ENVIRONMENT to 10f), groups = mapOf(Group.YOUTH to 3f)),
+        ProjectDef("habitacao", "Programa de moradia", "people", "Milhões de casas populares",
+            0.012f, 30, index = mapOf(Area.SOCIAL to 8f), groups = mapOf(Group.WORKERS to 6f), stability = 3f),
+        ProjectDef("olimpiadas", "Sediar as Olimpíadas", "trophy", "Vitrine mundial e orgulho nacional",
+            0.010f, 24, index = mapOf(Area.INFRA to 3f), groups = Group.entries.associateWith { 3f }),
+        ProjectDef("irrigacao", "Irrigação no semiárido", "flood", "Canais e cisternas para o campo",
+            0.008f, 24, index = mapOf(Area.SOCIAL to 3f), growth = 0.002f, groups = mapOf(Group.WORKERS to 3f)),
+    )
+    val projectById = projects.associateBy { it.id }
+
+    fun projectCost(n: Nation, p: ProjectDef): Double = game.natGdp(n.id) * p.cost
+
+    fun canStart(n: Nation, p: ProjectDef): String? {
+        if (p.id in n.built) return "Já construído"
+        if (n.projects.any { it.id == p.id }) return "Em obras"
+        if (n.projects.size >= 3) return "No máximo 3 obras ao mesmo tempo"
+        if (p.needsCoast && sim.provincesOf(n.id).none { world.provinces[it].coastal }) return "Precisa de litoral"
+        p.needsTech?.let { (b, l) -> if (n.tech[b.ordinal] < l) return "Precisa de ${b.label} nível $l" }
+        if (n.treasury < projectCost(n, p)) return "Tesouro insuficiente (${Fmt.money(projectCost(n, p))})"
+        return null
+    }
+
+    fun start(n: Nation, p: ProjectDef): String? {
+        canStart(n, p)?.let { return it }
+        n.treasury -= projectCost(n, p)
+        n.projects += ProjectBuild(p.id, p.months, p.months)
+        if (n.id == game.player) sim.feed(p.icon, "Obra iniciada: ${p.name}", 1)
+        sim.touch()
+        return null
+    }
+
+    private fun monthlyProjects(n: Nation) {
+        for (b in n.projects.toList()) {
+            b.monthsLeft--
+            if (b.monthsLeft <= 0) {
+                n.projects.remove(b)
+                n.built += b.id
+                val p = projectById[b.id] ?: continue
+                for ((g, v) in p.groups) n.groupMods[g.ordinal] += v * 2
+                if (n.id == game.player) sim.feed(p.icon, "Obra concluída: ${p.name}", 1)
+            }
+        }
+    }
+
+    fun builtIndex(n: Nation, a: Area): Float = n.built.sumOf { (projectById[it]?.index?.get(a) ?: 0f).toDouble() }.toFloat()
+    fun builtGrowth(n: Nation): Float = n.built.sumOf { (projectById[it]?.growth ?: 0f).toDouble() }.toFloat()
+    fun builtStability(n: Nation): Float = n.built.sumOf { (projectById[it]?.stability ?: 0f).toDouble() }.toFloat()
+    fun builtGroups(n: Nation, g: Group): Float = n.built.sumOf { (projectById[it]?.groups?.get(g) ?: 0f).toDouble() }.toFloat()
+    fun builtDiscount(n: Nation): Float = n.built.sumOf { (projectById[it]?.unitDiscount ?: 0f).toDouble() }.toFloat()
+    fun builtResearch(n: Nation): Float = n.built.sumOf { (projectById[it]?.research ?: 0f).toDouble() }.toFloat()
+
+    // ============================================================ reservistas automáticos
+
+    /** Teto de divisões terrestres sustentadas pela população. */
+    fun manpowerCap(n: Int): Float = (sqrt(game.natPop(n) / 1e6) * 10.0).toFloat().coerceAtLeast(4f)
+
+    /** Divisões novas por mês que os estados do país treinam sozinhos. */
+    fun recruitRate(n: Nation): Float {
+        val pop = game.natPop(n.id)
+        val def = (n.shares[Area.DEFENSE.ordinal] / 0.02f).coerceIn(0.3f, 3f)
+        val stab = 0.6f + n.stability / 250f
+        val war = if (sim.atWarAny(n.id)) 1.6f else 1f
+        val law = if ("servico_militar" in n.laws) 1.4f else 1f
+        return (pop / 120e6).toFloat().coerceAtLeast(0.15f) * def * stab * war * law
+    }
+
+    fun landDivisions(n: Int): Float = game.armies.filter { it.owner == n && it.domain == Domain.LAND }.sumOf { it.divisions().toDouble() }.toFloat()
+
+    private fun monthlyRecruits(n: Nation) {
+        if (game.natProvinces(n.id) == 0) return
+        val cap = manpowerCap(n.id)
+        val have = landDivisions(n.id)
+        if (have >= cap) return
+        n.reserves += recruitRate(n) * (if (n.militaryFund < 0) 0.5f else 1f)
+        if (n.reserves < 1f) return
+        val count = min(n.reserves.toInt().toFloat(), cap - have).coerceAtLeast(0f)
+        if (count < 1f) return
+        n.reserves -= count
+        val spot = recruitSpot(n) ?: return
+        val a = game.armies.firstOrNull { it.owner == n.id && it.province == spot && it.domain == Domain.LAND && !it.moving && !it.battle }
+            ?: sim.military.newArmy(n.id, spot, Domain.LAND)
+        a.units[UnitType.INFANTRY.ordinal] += count
+        if (n.id == game.player) sim.feed("military", "+${count.toInt()} divisões de reservistas em ${world.provinces[spot].name}", 0, spot)
+    }
+
+    /** Jogador: ponto de reunião ou capital. Computador: frente de batalha, fronteira tensa ou capital. */
+    fun recruitSpot(n: Nation): Int? {
+        val mine = sim.provincesOf(n.id).filter { game.controller[it] == n.id }
+        if (mine.isEmpty()) return null
+        if (n.id == game.player) {
+            val rp = game.rallyPoint
+            if (rp >= 0 && game.controller[rp] == n.id) return rp
+            return n.capital.takeIf { game.controller[it] == n.id } ?: mine.maxBy { game.provPop[it] }
+        }
+        val front = mine.filter { p -> world.provinces[p].neighbors.any { q -> sim.atWar(n.id, game.controller[q]) } }
+        if (front.isNotEmpty()) return front.maxBy { game.provPop[it] }
+        return n.capital.takeIf { game.controller[it] == n.id } ?: mine.maxBy { game.provPop[it] }
+    }
+
+    // ============================================================ histórico
+
+    private fun record() {
+        val me = sim.player
+        val gdp = game.natGdp(me.id)
+        game.history += HistoryPoint(game.day, gdp, me.approval, me.stability, me.treasury,
+            if (gdp > 0) (me.debt / gdp).toFloat() else 0f, sim.landPower(me.id).toFloat())
+        while (game.history.size > 120) game.history.removeAt(0)
+    }
+
+    // ============================================================ mês
+
+    fun monthly() {
+        monthlyPrices()
+        ensureCabinet()
+        monthlyCabinet()
+        for (n in game.nations) if (n.alive) {
+            monthlyTrade(n)
+            monthlyProjects(n)
+            monthlyRecruits(n)
+        }
+        aiProjects()
+        record()
+    }
+
+    /** Países do computador também constroem, devagar. */
+    private fun aiProjects() {
+        val n = sim.pick(game.nations.filter { it.alive && it.id != game.player })
+        if (n.projects.isNotEmpty() || !sim.chance(0.5)) return
+        val options = projects.filter { canStart(n, it) == null }
+        if (options.isNotEmpty() && n.treasury > game.natGdp(n.id) * 0.03) start(n, sim.pick(options))
+    }
+
+    @Suppress("unused") private fun clamp(v: Float) = max(0f, v)
+}

@@ -103,9 +103,11 @@ enum class TreatyType(val label: String, val minRelation: Float) {
     ALLIANCE("Aliança militar", 50f),
     /** a sanciona b (direcional) */
     SANCTION("Sanção", 999f),
-    EMBARGO("Embargo", 999f);
+    EMBARGO("Embargo", 999f),
+    /** a garante a independência de b (direcional) */
+    GUARANTEE("Garantia de independência", 20f);
 
-    val bilateral get() = this != SANCTION && this != EMBARGO
+    val bilateral get() = this != SANCTION && this != EMBARGO && this != GUARANTEE
 }
 
 enum class TechBranch(val label: String) {
@@ -215,6 +217,10 @@ class Nation(
 
     val queue: MutableList<BuildOrder> = mutableListOf(),
     var casualtiesMonth: Float = 0f,
+    /** reservistas acumulados (viram infantaria ao chegar a 1) */
+    var reserves: Float = 0f,
+    val projects: MutableList<ProjectBuild> = mutableListOf(),
+    val built: MutableSet<String> = mutableSetOf(),
 )
 
 @Serializable
@@ -321,6 +327,19 @@ class Game(
     var gameOver: GameOver? = null,
     val achieved: MutableSet<Victory> = mutableSetOf(),
     val customLaws: MutableList<CustomLaw> = mutableListOf(),
+    /** piloto automático de guerra do jogador */
+    var autoWar: Boolean = false,
+    /** país alvo do piloto automático (-1 = todos os inimigos) */
+    var autoTarget: Int = -1,
+    /** junta sozinho exércitos parados na mesma província */
+    var autoMerge: Boolean = true,
+    /** onde chegam os reservistas do jogador (-1 = capital) */
+    var rallyPoint: Int = -1,
+    val ministers: MutableList<Minister> = mutableListOf(),
+    val candidates: MutableList<Minister> = mutableListOf(),
+    val history: MutableList<HistoryPoint> = mutableListOf(),
+    /** preço relativo de cada recurso (1 = normal) */
+    val prices: FloatArray = FloatArray(Resource.entries.size) { 1f },
     var rngState: Long = 1L,
     var eventCalm: Int = 0,
 ) {
@@ -365,3 +384,20 @@ class TreatyCache(val keys: HashSet<Long>, val allied: BooleanArray) {
 /** Lei montada pelo jogador a partir de medidas (ver LawMaker). */
 @Serializable
 class CustomLaw(val id: String, var name: String, val measures: List<String>, val intensity: Int = 2)
+
+@Serializable
+class ProjectBuild(val id: String, var monthsLeft: Int, val total: Int)
+
+enum class MinisterSlot(val label: String) {
+    ECONOMY("Economia"), HEALTH("Saúde"), SECURITY("Segurança"), DEFENSE("Defesa"), FOREIGN("Relações Exteriores"), EDUCATION("Educação")
+}
+
+@Serializable
+class Minister(val name: String, val slot: MinisterSlot, val skill: Int, val loyalty: Int, val corruption: Int, val since: Int = 0)
+
+@Serializable
+class HistoryPoint(val day: Int, val gdp: Double, val approval: Float, val stability: Float, val treasury: Double, val debtRatio: Float, val power: Float)
+
+enum class Resource(val label: String, val icon: String) {
+    OIL("Petróleo", "oil"), MINERALS("Minérios", "factory"), FOOD("Alimentos", "field")
+}

@@ -72,6 +72,8 @@ private fun App(store: SaveStore) {
     var controller by remember { mutableStateOf<GameController?>(null) }
     val scope = rememberCoroutineScope()
 
+    // procura atualização em segundo plano ao abrir
+    LaunchedEffect(Unit) { runCatching { com.dmwnezes.soberano.update.UpdateState.checkOnStart(ctx) } }
     LaunchedEffect(Unit) {
         if (WorldHolder.world == null) {
             withContext(Dispatchers.Default) {

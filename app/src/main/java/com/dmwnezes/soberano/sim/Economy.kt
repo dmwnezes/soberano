@@ -63,8 +63,10 @@ class Economy(private val sim: Sim) {
         g -= 0.01f * sanctionsOn(n.id)
         if (sim.atWarAny(n.id)) g -= 0.01f
         g -= occupiedFraction(n.id) * 0.2f
-        if (game.settings.economy != EconomyDepth.SIMPLE) g -= max(0f, n.inflation - 6f) * 0.002f
+        if (game.settings.economy != EconomyDepth.SIMPLE) g -= min(0.03f, max(0f, n.inflation - 6f) * 0.002f)
         g += lawSum(n) { it.growth }
+        g += sim.dev.tradeGrowth(n) + sim.dev.builtGrowth(n)
+        if (n.id == game.player) g += sim.dev.economyBonus()
         g += (n.tech[TechBranch.ECONOMY.ordinal] - 3) * 0.001f
         if (n.id == game.player) g += (game.settings.difficulty.economy - 1f) * 0.02f
         return g.coerceIn(-0.15f, 0.12f)
@@ -75,6 +77,7 @@ class Economy(private val sim: Sim) {
         var t = Setup.target(a, n.shares[a.ordinal])
         t += n.laws.sumOf { (Content.law(it)?.index?.get(a) ?: 0f).toDouble() }.toFloat()
         t += (n.tech[TechBranch.SOCIETY.ordinal] - 3) * 1f
+        t += sim.dev.builtIndex(n, a)
         if (a == Area.SECURITY) t -= occupiedFraction(n.id) * 30f
         return t.coerceIn(0f, 100f)
     }
@@ -85,7 +88,9 @@ class Economy(private val sim: Sim) {
         if (b.gdp <= 0) return
         val balance = b.balance
         n.treasury += balance
-        if (n.treasury < 0) { n.debt += -n.treasury; n.treasury = 0.0 }
+        // microestados do computador não se endividam (evita calotes em série)
+        val micro = n.id != game.player && b.gdp < 3.0
+        if (n.treasury < 0) { if (!micro) n.debt += -n.treasury; n.treasury = 0.0 }
         n.lastRevenue = b.revenue
         n.lastExpense = b.civil + b.defense + b.interest
         n.militaryFund += b.defense - b.upkeep
@@ -100,10 +105,12 @@ class Economy(private val sim: Sim) {
         val eff = 1f - n.corruption / 250f
         for (a in Area.entries) if (a.hasIndex) {
             val i = a.ordinal
-            n.index[i] += (indexTarget(n, a) - n.index[i]) * 0.08f * eff
+            val mult = if (n.id == game.player) sim.dev.ministerMult(a) else 1f
+            n.index[i] += (indexTarget(n, a) - n.index[i]) * 0.08f * eff * mult
             n.index[i] = n.index[i].coerceIn(0f, 100f)
         }
-        val corrBase = (60f - n.income * 8f) + (if (n.regime == Regime.DICTATORSHIP) 12f else 0f) + lawSum(n) { it.corruption }
+        val corrBase = (60f - n.income * 8f) + (if (n.regime == Regime.DICTATORSHIP) 12f else 0f) + lawSum(n) { it.corruption } +
+            (if (n.id == game.player) sim.dev.cabinetCorruption() else 0f)
         n.corruption += (corrBase - n.corruption) * 0.03f
         n.corruption = n.corruption.coerceIn(0f, 100f)
 
@@ -122,7 +129,7 @@ class Economy(private val sim: Sim) {
         // inflação e desemprego
         val deficit = max(0.0, -balance * 12.0) / b.gdp
         val inflTarget = if (game.settings.economy == EconomyDepth.SIMPLE) 3f
-        else (3f + 40f * deficit.toFloat() + lawSum(n) { it.inflation }).coerceIn(0f, 80f)
+        else (3f + 25f * deficit.toFloat() + lawSum(n) { it.inflation }).coerceIn(0f, 80f)
         n.inflation += (inflTarget - n.inflation) * 0.2f
         val uTarget = 7f - (g * 100f - 2f) * 1.2f + (if (sim.atWarAny(n.id)) 1.5f else 0f)
         n.unemployment += (uTarget.coerceIn(1.5f, 40f) - n.unemployment) * 0.2f
@@ -140,7 +147,7 @@ class Economy(private val sim: Sim) {
     fun techCost(level: Int): Float = 10f * level.toFloat().pow(1.5f)
 
     private fun research(n: Nation, gdp: Double) {
-        val pts = (2f + n.index[Area.RESEARCH.ordinal] / 20f + log10(gdp + 1).toFloat() * 1.5f) *
+        val pts = (2f + n.index[Area.RESEARCH.ordinal] / 20f + log10(gdp + 1).toFloat() * 1.5f + sim.dev.builtResearch(n)) *
             (0.6f + n.index[Area.EDUCATION.ordinal] / 125f)
         for (b in TechBranch.entries) {
             val share = if (b.ordinal == n.researchFocus) 0.6f else 0.08f

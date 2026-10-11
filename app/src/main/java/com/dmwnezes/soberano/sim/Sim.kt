@@ -17,9 +17,11 @@ class Sim(val world: WorldMap, val game: Game) {
     val military = Military(this)
     val ai = Ai(this)
     val events = Events(this)
+    val dev = Development(this)
 
     init {
         LawMaker.register(game)
+        dev.ensureCabinet()
         // saves da versão 0.1 usavam outra paleta
         for (n in game.nations) {
             val k = Setup.OLD_PALETTE.indexOf(n.mapColor)
@@ -130,6 +132,7 @@ class Sim(val world: WorldMap, val game: Game) {
         military.dailyProduction()
         military.dailyMovement()
         military.dailyCombat()
+        military.dailyAutoMerge()
         military.dailySiege()
         ai.daily()
 
@@ -146,6 +149,7 @@ class Sim(val world: WorldMap, val game: Game) {
         }
         military.monthlyResistance()
         diplomacy.monthly()
+        dev.monthly()
         events.monthly()
         politics.checkEndConditions()
         game.invalidate()

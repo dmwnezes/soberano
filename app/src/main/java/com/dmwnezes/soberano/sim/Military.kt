@@ -459,7 +459,9 @@ class Military(private val sim: Sim) {
     fun unitCost(n: Nation, t: UnitType): Double {
         var c = t.cost
         if (t == UnitType.INFANTRY && "servico_militar" in n.laws) c *= 0.85
-        return c
+        var discount = sim.dev.builtDiscount(n)
+        if (n.id == game.player) discount += sim.dev.defenseDiscount()
+        return c * (1.0 - discount.coerceIn(-0.2f, 0.4f))
     }
 
     fun productionSlots(n: Nation): Int = (1 + game.natGdp(n.id) / 400.0).toInt().coerceIn(1, 30)
@@ -576,6 +578,29 @@ class Military(private val sim: Sim) {
     }
 
     fun disband(a: Army) { game.armies.remove(a); sim.touch() }
+
+    /** Manda todos os exércitos terrestres parados de [owner] para [p]. Retorna quantos foram. */
+    fun gatherAt(owner: Int, p: Int): Int {
+        var n = 0
+        for (a in game.armies.toList()) {
+            if (a.owner != owner || a.domain != Domain.LAND || a.battle || a.province == p) continue
+            if (order(a, p) == null) n++
+        }
+        sim.touch()
+        return n
+    }
+
+    /** Junta exércitos parados do mesmo dono na mesma província (reunião automática do jogador). */
+    fun dailyAutoMerge() {
+        if (!game.autoMerge) return
+        val me = game.player
+        val idle = game.armies.filter { it.owner == me && !it.moving && !it.battle }
+        val groups = idle.groupBy { it.province to it.domain }
+        for ((_, list) in groups) if (list.size > 1) {
+            val main = list.maxBy { it.total() }
+            for (o in list) if (o !== main) merge(main, o)
+        }
+    }
 
     // ------------------------------------------------------------- resistência
 

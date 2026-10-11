@@ -50,6 +50,7 @@ fun HomeScreen(preview: Sim, store: SaveStore, onNew: () -> Unit, onLoad: (Strin
     val camera = remember { MapCamera() }
     var latest by remember { mutableStateOf<SaveMeta?>(null) }
     var showSlots by remember { mutableStateOf(false) }
+    var showUpdate by remember { mutableStateOf(false) }
     LaunchedEffect(Unit) { latest = store.latest() }
     // o mapa desliza devagar ao fundo
     LaunchedEffect(Unit) {
@@ -92,14 +93,21 @@ fun HomeScreen(preview: Sim, store: SaveStore, onNew: () -> Unit, onLoad: (Strin
                 Btn("Novo jogo", Modifier.weight(1f), if (latest == null) BtnKind.PRIMARY else BtnKind.SECONDARY, Icons.Rounded.Add) { onNew() }
                 Btn("Carregar", Modifier.weight(1f), BtnKind.SECONDARY, Icons.Rounded.FolderOpen) { showSlots = true }
             }
-            Spacer(Modifier.height(22.dp))
+            Spacer(Modifier.height(12.dp))
+            com.dmwnezes.soberano.update.UpdatePill(Modifier.align(Alignment.CenterHorizontally)) { showUpdate = true }
+            Spacer(Modifier.height(10.dp))
+            Row(Modifier.align(Alignment.CenterHorizontally), verticalAlignment = Alignment.CenterVertically) {
             Text(
                 "criado por: @dmwnezes", style = Type.small, color = Ink.faint,
-                modifier = Modifier.align(Alignment.CenterHorizontally).clip(Shapes.chip).clickable {
+                modifier = Modifier.clip(Shapes.chip).clickable {
                     runCatching { ctx.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse("https://instagram.com/dmwnezes"))) }
                 }.padding(horizontal = 10.dp, vertical = 4.dp),
             )
+            Text("versão ${com.dmwnezes.soberano.update.Updater.currentName}", style = Type.small, color = Ink.faint,
+                modifier = Modifier.clip(Shapes.chip).clickable { showUpdate = true }.padding(horizontal = 10.dp, vertical = 4.dp))
+            }
         }
+        if (showUpdate) com.dmwnezes.soberano.update.UpdateDialog { showUpdate = false }
         if (showSlots) SlotsDialog(store, saving = false, onDismiss = { showSlots = false }, onPick = { showSlots = false; onLoad(it) })
     }
 }

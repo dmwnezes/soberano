@@ -35,6 +35,8 @@ class GameController(val sim: Sim, private val store: SaveStore, private val sco
     var mapMode by mutableStateOf(MapMode.POLITICAL)
     var showSettings by mutableStateOf(false)
     val camera = MapCamera()
+    /** sub-aba aberta em cada gaveta */
+    val subTab = androidx.compose.runtime.mutableStateMapOf<Tab, Int>()
     var lawEditor by mutableStateOf(false)
     /** lei aberta na explicação detalhada */
     var lawInfo by mutableStateOf<String?>(null)
@@ -89,7 +91,8 @@ class GameController(val sim: Sim, private val store: SaveStore, private val sco
             acc -= len
             days++
             val m = sim.date().monthValue
-            if (m != lastMonth) { lastMonth = m; autosave() }
+            // salva a cada três meses (gravar a cada mês travava a tela em velocidade alta)
+            if (m != lastMonth) { lastMonth = m; if (m % 3 == 1) autosave() }
         }
         if (days > 0) tick++
         if (game.events.isNotEmpty() || game.gameOver != null) paused = true

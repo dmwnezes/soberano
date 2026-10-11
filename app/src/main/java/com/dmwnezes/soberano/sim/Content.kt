@@ -270,6 +270,75 @@ object Content {
                 Choice("Recusar", listOf(fx("g:YOUTH", -3))),
             )),
 
+        // ---------- novos (recursos, sociedade, militar)
+        EventDef("choque_petroleo", EventCategory.ECONOMY, "oil", "Choque do petróleo", "Um conflito no Golfo fez o barril disparar.",
+            weight = { _, _ -> 0.6f },
+            choices = listOf(
+                Choice("Subsidiar combustível", listOf(fx("money", -0.004), fx("all", 3), fx("price:OIL", 0.5))),
+                Choice("Repassar o preço", listOf(fx("infl", 1.5), fx("g:WORKERS", -6), fx("price:OIL", 0.5))),
+            )),
+        EventDef("supersafra", EventCategory.ECONOMY, "field", "Supersafra", "O campo colheu como nunca.",
+            choices = listOf(
+                Choice("Exportar tudo", listOf(fx("money", 0.004), fx("g:BUSINESS", 4), fx("price:FOOD", -0.2))),
+                Choice("Estoque regulador", listOf(fx("infl", -0.8), fx("g:WORKERS", 3))),
+            )),
+        EventDef("mina", EventCategory.DISASTER, "factory", "Barragem rompe", "Uma barragem de rejeitos rompeu em {p}.", needsProvince = true,
+            weight = { _, n -> 0.3f + (100f - n.index[Area.ENVIRONMENT.ordinal]) / 80f },
+            choices = listOf(
+                Choice("Punir a mineradora", listOf(fx("money", 0.002), fx("g:BUSINESS", -6), fx("g:YOUTH", 5), fx("i:ENVIRONMENT", -4))),
+                Choice("Acordo discreto", listOf(fx("corr", 4), fx("all", -5), fx("i:ENVIRONMENT", -6))),
+            )),
+        EventDef("hackers", EventCategory.SECURITY, "shield", "Ataque hacker", "Sistemas do governo foram invadidos por hackers estrangeiros.",
+            weight = lowIdx(Area.RESEARCH),
+            choices = listOf(
+                Choice("Investir em defesa digital", listOf(fx("money", -0.002), fx("i:SECURITY", 3), fx("tech", 10))),
+                Choice("Acusar o país de origem", listOf(fx("relo", -15), fx("g:MILITARY", 3))),
+            ), needsOther = true),
+        EventDef("motim", EventCategory.POLITICS, "military", "Motim no quartel", "Soldados reclamam de salários atrasados.",
+            weight = { _, n -> 0.2f + (if (n.militaryFund < 0) 2f else 0f) + (50f - n.groups[Group.MILITARY.ordinal]).coerceAtLeast(0f) / 20f },
+            choices = listOf(
+                Choice("Pagar os atrasados", listOf(fx("money", -0.003), fx("g:MILITARY", 8), fx("morale", 0.1))),
+                Choice("Prender os líderes", listOf(fx("g:MILITARY", -8), fx("morale", -0.15), fx("stab", 2))),
+            )),
+        EventDef("imigrantes", EventCategory.INTERNATIONAL, "people", "Mão de obra estrangeira", "Empresas pedem vistos para trabalhadores de {o}.", needsOther = true,
+            choices = listOf(
+                Choice("Abrir vistos", listOf(fx("gdp", 0.004), fx("pop", 0.001), fx("g:WORKERS", -4), fx("relo", 8))),
+                Choice("Proteger empregos", listOf(fx("g:WORKERS", 4), fx("g:BUSINESS", -4))),
+            )),
+        EventDef("descoberta_litio", EventCategory.SCIENCE, "atom", "Reserva de lítio", "Geólogos acharam lítio em {p}.", needsProvince = true,
+            weight = { _, _ -> 0.4f },
+            choices = listOf(
+                Choice("Indústria de baterias", listOf(fx("money", -0.003), fx("gdp", 0.01), fx("tech", 15))),
+                Choice("Exportar o minério", listOf(fx("money", 0.006), fx("price:MINERALS", -0.1))),
+            )),
+        EventDef("eleicao_vizinho", EventCategory.INTERNATIONAL, "vote", "Eleição tensa em {o}", "A oposição de {o} pede seu apoio.", needsOther = true,
+            choices = listOf(
+                Choice("Apoiar a oposição", listOf(fx("relo", -20), fx("cap", 3))),
+                Choice("Ficar neutro", listOf(fx("relo", 3))),
+            )),
+        EventDef("greve_caminhoneiros", EventCategory.POLITICS, "strike", "Greve dos caminhoneiros", "Estradas bloqueadas e prateleiras vazias.",
+            weight = { _, n -> 0.4f + (n.inflation - 4f).coerceAtLeast(0f) / 4f },
+            choices = listOf(
+                Choice("Baixar o diesel", listOf(fx("money", -0.003), fx("g:WORKERS", 5))),
+                Choice("Liberar à força", listOf(fx("stab", -4), fx("g:WORKERS", -6), fx("gdp", -0.002))),
+            )),
+        EventDef("ponte", EventCategory.DISASTER, "alert", "Ponte desaba", "Uma ponte importante caiu em {p}.", needsProvince = true,
+            weight = lowIdx(Area.INFRA),
+            choices = listOf(
+                Choice("Reconstruir já", listOf(fx("money", -0.003), fx("i:INFRA", 2))),
+                Choice("Desvio provisório", listOf(fx("i:INFRA", -4), fx("gdp", -0.002))),
+            )),
+        EventDef("medalha", EventCategory.HUMOR, "trophy", "Ouro inesperado", "Um atleta de {p} ganhou ouro no curling.", needsProvince = true,
+            choices = listOf(
+                Choice("Feriado regional", listOf(fx("all", 2), fx("gdp", -0.0005))),
+                Choice("Parabéns nas redes", listOf(fx("g:YOUTH", 2))),
+            )),
+        EventDef("papagaio", EventCategory.HUMOR, "goat", "Papagaio patriota", "Um papagaio que canta o hino virou celebridade nacional.",
+            choices = listOf(
+                Choice("Nomear mascote oficial", listOf(fx("g:YOUTH", 4), fx("rel", 1))),
+                Choice("Ignorar", listOf())
+            )),
+
         // ---------- humor
         EventDef("cabra", EventCategory.HUMOR, "goat", "Cabra eleita", "Uma cabra venceu a eleição para vereadora em {p}.", needsProvince = true,
             choices = listOf(

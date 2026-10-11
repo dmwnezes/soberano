@@ -16,6 +16,32 @@ class Ai(private val sim: Sim) {
             if (n.id % 30 == day % 30) strategic(n)
             if (sim.atWarAny(n.id) && (n.id + day) % 2 == 0) warOrders(n)
         }
+        // piloto automático do jogador: comanda tropas e recruta perto da frente
+        val me = game.nations[game.player]
+        if (game.autoWar && me.alive && sim.atWarAny(me.id)) {
+            val target = game.autoTarget.takeIf { it >= 0 && sim.atWar(me.id, it) } ?: -1
+            if (day % 2 == 0) warOrders(me, target)
+            if (day % 10 == 0) buildForWar(me, target)
+        }
+    }
+
+    /** Recruta com o fundo militar na província mais próxima do inimigo (ou do alvo). */
+    fun buildForWar(n: Nation, target: Int) {
+        val mine = sim.provincesOf(n.id).filter { game.controller[it] == n.id }
+        if (mine.isEmpty()) return
+        val enemyProv = game.controller.indices.filter { val c = game.controller[it]; if (target >= 0) c == target else sim.atWar(n.id, c) }
+        if (enemyProv.isEmpty()) return
+        val sample = if (enemyProv.size > 40) enemyProv.shuffledBy().take(40) else enemyProv
+        val spot = mine.minBy { p -> sample.minOf { world.distanceKm(p, it) } }
+        var budget = max(0.0, n.militaryFund) * 0.7
+        var guard = 0
+        while (budget > 0 && guard++ < 30 && n.queue.size < 40) {
+            val roll = sim.randf()
+            val type = when { roll < 0.5f -> UnitType.INFANTRY; roll < 0.75f -> UnitType.ARMOR; roll < 0.9f -> UnitType.ARTILLERY; else -> UnitType.ANTIAIR }
+            val cost = sim.military.unitCost(n, type)
+            if (cost > budget) { if (type == UnitType.INFANTRY) break else continue }
+            if (sim.military.buy(n, type, spot) == null) budget -= cost else break
+        }
     }
 
     private fun strategic(n: Nation) {
@@ -146,6 +172,7 @@ class Ai(private val sim: Sim) {
             } else sim.diplomacy.sign(type, n.id, c)
             break
         }
+        proposalsToPlayer(n)
         // relação ruim desfaz aliança
         for (t in game.treaties.filter { it.type == TreatyType.ALLIANCE && (it.a == n.id || it.b == n.id) }) {
             val o = if (t.a == n.id) t.b else t.a
@@ -184,6 +211,14 @@ class Ai(private val sim: Sim) {
             for (o in game.nations) if (o.alive && o.id != t && sim.allied(o.id, t)) theirs += sim.landPower(o.id) * 0.5
             if (my < theirs * 1.5 / min(1.5f, aggr)) continue
             if (sim.chance(0.12 * aggr)) {
+                // contra o jogador, às vezes primeiro vem um ultimato
+                if (t == game.player && sim.chance(0.5) && game.proposals.none { it.from == n.id }) {
+                    val border = sim.diplomacy.borderProvinces(n.id, t)
+                    if (border.isNotEmpty()) {
+                        game.proposals += Proposal(n.id, "DEMAND", game.day, border.minBy { game.provPop[it] }.toDouble())
+                        return
+                    }
+                }
                 sim.diplomacy.declareWar(n.id, t)
                 return
             }
@@ -220,7 +255,10 @@ class Ai(private val sim: Sim) {
 
     private var enemyPower = HashMap<Int, Float>()
 
-    private fun warOrders(n: Nation) {
+    private var focusTarget = -1
+
+    private fun warOrders(n: Nation, target: Int = -1) {
+        focusTarget = target
         val armies = sim.armiesOf(n.id)
         enemyPower = HashMap()
         for (a in game.armies) if (a.domain == Domain.LAND && sim.atWar(n.id, a.owner))
@@ -264,6 +302,7 @@ class Ai(private val sim: Sim) {
                     val isCap = sim.nation(ctrl).capital == v
                     val mineOwned = game.owner[v] == n.id
                     var score = (game.provPop[v] / 1e6).toFloat().coerceAtMost(20f) + (if (isCap) 25f else 0f) + (if (mineOwned) 15f else 0f)
+                    if (focusTarget >= 0) score += if (ctrl == focusTarget) 30f else if (!mineOwned) -15f else 0f
                     score -= (d + 1) * 1.2f
                     if (enemyHere > mine * 1.1f) score -= 40f else if (enemyHere > 0f) score += 5f
                     if (score > bestScore) { bestScore = score; best = v }
@@ -275,6 +314,11 @@ class Ai(private val sim: Sim) {
         if (best >= 0 && bestScore > -30f) {
             sim.military.order(a, best)
             return
+        }
+        // alvo longe demais para a busca: marcha até a província mais próxima do alvo
+        if (focusTarget >= 0) {
+            val t = game.controller.indices.filter { game.controller[it] == focusTarget }.minByOrNull { world.distanceKm(here, it) }
+            if (t != null && sim.military.order(a, t) == null) return
         }
         // sem alvo por terra: desembarque
         if (sim.military.transportCapacity(n.id) >= a.divisions() && sim.randf() < 0.3f) {
@@ -304,5 +348,35 @@ class Ai(private val sim: Sim) {
         val base = sim.provincesOf(n.id).filter { game.controller[it] == n.id }
             .minByOrNull { world.distanceKm(it, battle.province) } ?: return
         if (base != a.province) sim.military.order(a, base)
+    }
+
+    // ------------------------------------------------------------- propostas ao jogador
+
+    private fun proposalsToPlayer(n: Nation) {
+        val p = game.player
+        if (!game.nations[p].alive || sim.atWar(n.id, p)) return
+        if (game.proposals.any { it.from == n.id } || game.proposals.size >= 4) return
+        val r = game.rel(n.id, p)
+        // aliança contra inimigo em comum
+        if (!sim.allied(n.id, p) && r >= 35f) {
+            val common = game.nations.any { o -> o.alive && o.id != n.id && o.id != p &&
+                (sim.atWar(p, o.id) || game.rel(p, o.id) < -40f) && game.rel(n.id, o.id) < -40f }
+            if (common && sim.chance(0.35) && sim.diplomacy.refusal(TreatyType.ALLIANCE, n.id, p) == null) {
+                game.proposals += Proposal(n.id, "ALLIANCE", game.day); return
+            }
+        }
+        // convite para bloco
+        for (b in game.blocs) {
+            if (p in b.members || n.id !in b.members || b.members.first() != n.id) continue
+            if (sim.diplomacy.inviteRefusal(b, p) == null && sim.chance(0.25)) {
+                game.proposals += Proposal(n.id, "BLOC", game.day, b.id.toDouble()); return
+            }
+        }
+        // aliado em guerra pede ajuda
+        if (sim.allied(n.id, p)) {
+            val w = game.wars.firstOrNull { it.involves(n.id) && !it.involves(p) &&
+                (if (it.side(n.id) == 1) it.defenders else it.attackers).none { e -> sim.allied(p, e) } }
+            if (w != null && sim.chance(0.4)) { game.proposals += Proposal(n.id, "JOIN_WAR", game.day, w.id.toDouble()); return }
+        }
     }
 }

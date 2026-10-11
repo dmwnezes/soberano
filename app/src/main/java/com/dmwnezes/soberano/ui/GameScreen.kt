@@ -159,7 +159,7 @@ fun GameScreen(
                     if (c.selProvince >= 0) ProvinceCard(c, c.selProvince)
                 }
             }
-            if (c.tab == null && game.proposals.isNotEmpty()) ProposalBanner(c)
+            if (c.tab == null && game.proposals.isNotEmpty() && c.selArmy < 0 && c.selProvince < 0) ProposalBanner(c)
             Dock(c)
         }
 
@@ -292,6 +292,7 @@ private fun TopBar(c: GameController) {
             StatPill(Icons.Rounded.Bolt, "${me.politicalCapital.toInt()}", Ink.brass) { c.openTab(Tab.GOVERNMENT) }
             val wars = g.wars.count { it.involves(me.id) }
             if (wars > 0) StatPill(Icons.Rounded.Whatshot, "$wars", Ink.coral) { c.openTab(Tab.WORLD) }
+            if (g.autoWar) StatPill(Icons.Rounded.SmartToy, "Auto", Ink.brass) { c.subTab[Tab.MILITARY] = 2; c.openTab(Tab.MILITARY) }
         }
     }
 }
@@ -464,10 +465,28 @@ private fun ProvinceCard(c: GameController, p: Int) {
                 }
             }
         }
+        // recursos que a província produz
+        val res = com.dmwnezes.soberano.sim.Resource.entries.map { it to c.sim.dev.provRes[it.ordinal][p] }.filter { it.second >= 0.5f }
+        if (res.isNotEmpty()) {
+            Spacer(Modifier.height(8.dp))
+            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                for ((r, v) in res) StatPill(GameIcons.of(r.icon), "${r.label} ${Fmt.money(v.toDouble()).removePrefix("US$ ")}", Ink.text)
+            }
+        }
+        if (g.owner[p] == me && ctrl == me) {
+            val isRally = g.rallyPoint == p
+            Text(if (isRally) "Ponto de reunião dos reservistas" else "Tornar ponto de reunião dos reservistas",
+                style = Type.small, color = if (isRally) Ink.good else Ink.verdigris,
+                modifier = Modifier.padding(top = 8.dp).clip(Shapes.chip).clickable(enabled = !isRally) { g.rallyPoint = p; c.say("Reservistas vão chegar em ${pr.name}", 1, "flag"); c.refresh() }.padding(vertical = 4.dp))
+        }
         Spacer(Modifier.height(12.dp))
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             if (g.owner[p] == me && ctrl == me) {
-                Btn("Recrutar aqui", Modifier.weight(1f), BtnKind.PRIMARY, Icons.Rounded.Add) { c.buildProvince = p; c.openTab(Tab.MILITARY) }
+                Btn("Recrutar", Modifier.weight(1f), BtnKind.PRIMARY, Icons.Rounded.Add) { c.buildProvince = p; c.subTab[Tab.MILITARY] = 1; c.openTab(Tab.MILITARY) }
+                Btn("Reunir aqui", Modifier.weight(1f), icon = Icons.Rounded.CallMerge) {
+                    val n = c.sim.military.gatherAt(me, p); g.autoMerge = true
+                    c.say(if (n > 0) "$n exércitos a caminho" else "Nenhum exército disponível", if (n > 0) 1 else 2, "flag", p)
+                }
             } else if (owner.id != me) {
                 Btn("Diplomacia", Modifier.weight(1f), BtnKind.SECONDARY, Icons.Rounded.Handshake) { c.focusNation = owner.id; c.tab = Tab.DIPLOMACY; c.refresh() }
                 if (ctrl != owner.id && ctrl != me) Btn(c.sim.nation(ctrl).name, Modifier.weight(1f), BtnKind.GHOST) { c.focusNation = ctrl; c.tab = Tab.DIPLOMACY; c.refresh() }
@@ -626,31 +645,22 @@ private fun OrderCard(c: GameController, a: Army, p: Int, onDeclare: (Int) -> Un
 private fun ProposalBanner(c: GameController) {
     val p = c.game.proposals.first()
     val from = c.sim.nation(p.from)
-    val label = when {
-        p.kind.startsWith("PEACE") -> "propõe paz branca"
-        else -> runCatching { "propõe ${TreatyType.valueOf(p.kind).label.lowercase()}" }.getOrDefault(p.kind)
-    }
+    val demand = p.kind == "DEMAND"
     Row(
-        Modifier.padding(horizontal = 12.dp, vertical = 6.dp).fillMaxWidth().clip(Shapes.card).background(Ink.panel).padding(12.dp),
+        Modifier.padding(horizontal = 12.dp, vertical = 6.dp).fillMaxWidth().clip(Shapes.card)
+            .background(if (demand) Ink.coral.copy(alpha = 0.25f) else Ink.panel).padding(12.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         FlagView(from, 20.dp)
         Spacer(Modifier.width(10.dp))
-        Text("${from.name} $label", style = Type.label, color = Ink.text, modifier = Modifier.weight(1f), maxLines = 2)
-        IconBtn(Icons.Rounded.Close, size = 34.dp, tint = Ink.coral) { c.game.proposals.remove(p); c.sim.game.addRel(p.from, c.game.player, -3f); c.refresh() }
+        Column(Modifier.weight(1f)) {
+            Text(from.name, style = Type.label.copy(fontWeight = FontWeight.SemiBold), color = Ink.text, maxLines = 1)
+            Text(proposalText(c, p), style = Type.small, color = if (demand) Ink.coral else Ink.muted, maxLines = 2)
+        }
+        if (c.game.proposals.size > 1) Text("+${c.game.proposals.size - 1}", style = Type.small, color = Ink.muted, modifier = Modifier.padding(end = 6.dp))
+        IconBtn(Icons.Rounded.Close, size = 34.dp, tint = Ink.coral) { declineProposal(c, p); c.refresh() }
         Spacer(Modifier.width(6.dp))
         IconBtn(Icons.Rounded.Check, size = 34.dp, bg = Ink.brass, tint = Ink.onBrass) { acceptProposal(c, p); c.refresh() }
-    }
-}
-
-fun acceptProposal(c: GameController, p: com.dmwnezes.soberano.sim.Proposal) {
-    c.game.proposals.remove(p)
-    if (p.kind.startsWith("PEACE")) {
-        val war = c.game.wars.firstOrNull { it.id == p.value.toInt() } ?: return
-        c.sim.diplomacy.makePeace(war, p.from, com.dmwnezes.soberano.sim.PeaceTerms.WHITE)
-    } else {
-        val t = runCatching { TreatyType.valueOf(p.kind) }.getOrNull() ?: return
-        if (!c.sim.hasTreaty(t, p.from, c.game.player)) c.sim.diplomacy.sign(t, p.from, c.game.player)
     }
 }
 
@@ -719,6 +729,7 @@ private fun NukeConfirm(c: GameController, p: Int, onClose: () -> Unit) {
 private fun SettingsOverlay(c: GameController, store: SaveStore, onExit: () -> Unit, onLoad: (String) -> Unit) {
     var slots by remember { mutableStateOf<Boolean?>(null) }
     var rules by remember { mutableStateOf(false) }
+    var update by remember { mutableStateOf(false) }
     Overlay({ c.showSettings = false }) {
         Text("Menu", style = Type.title, color = Ink.text)
         Spacer(Modifier.height(14.dp))
@@ -730,6 +741,8 @@ private fun SettingsOverlay(c: GameController, store: SaveStore, onExit: () -> U
         Spacer(Modifier.height(8.dp))
         Btn("Regras da partida", Modifier.fillMaxWidth(), icon = Icons.Rounded.Tune) { rules = true }
         Spacer(Modifier.height(8.dp))
+        Btn("Buscar atualização", Modifier.fillMaxWidth(), icon = Icons.Rounded.SystemUpdate) { update = true }
+        Spacer(Modifier.height(8.dp))
         Btn("Sair para o menu", Modifier.fillMaxWidth(), BtnKind.GHOST, Icons.Rounded.Logout) { c.showSettings = false; onExit() }
     }
     slots?.let { saving ->
@@ -739,6 +752,7 @@ private fun SettingsOverlay(c: GameController, store: SaveStore, onExit: () -> U
             else { c.showSettings = false; onLoad(slot) }
         }
     }
+    if (update) com.dmwnezes.soberano.update.UpdateDialog { update = false }
     if (rules) {
         Box(Modifier.fillMaxSize().background(Ink.panelSolid).statusBarsPadding().navigationBarsPadding()) {
             Column(Modifier.fillMaxSize().padding(18.dp)) {
