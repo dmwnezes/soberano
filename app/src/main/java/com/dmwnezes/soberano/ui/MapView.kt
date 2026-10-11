@@ -20,6 +20,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
@@ -562,6 +563,9 @@ fun WorldMapView(
 ) {
     val ctx = LocalContext.current
     val density = LocalDensity.current.density
+    // o detector de toques vive mais que uma composição: sempre chama a versão mais nova dos callbacks
+    val tapProvince by rememberUpdatedState(onTapProvince)
+    val tapArmy by rememberUpdatedState(onTapArmy)
     val renderer = remember(sim.world) {
         MapRenderer(sim.world, runCatching { ResourcesCompat.getFont(ctx, R.font.outfit_semibold) }.getOrNull())
     }
@@ -591,11 +595,11 @@ fun WorldMapView(
                     onDoubleTap = { o -> camera.zoomAt(o, 2f); camera.clamp() },
                     onTap = { o ->
                         val hit = renderer.markerRects(sim, camera, density).lastOrNull { it.second.contains(o.x, o.y) }
-                        if (hit != null) { onTapArmy(hit.first); return@detectTapGestures }
+                        if (hit != null) { tapArmy(hit.first); return@detectTapGestures }
                         val w = camera.toWorld(o)
                         var p = sim.world.hit(w.x, w.y)
                         if (p < 0) p = sim.world.nearest(w.x, w.y, 10f * density / camera.scale)
-                        onTapProvince(p)
+                        tapProvince(p)
                     },
                 )
             },

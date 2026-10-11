@@ -34,6 +34,7 @@ class GameController(val sim: Sim, private val store: SaveStore, private val sco
     var focusNation by mutableIntStateOf(-1)
     var mapMode by mutableStateOf(MapMode.POLITICAL)
     var showSettings by mutableStateOf(false)
+    val camera = MapCamera()
     var lawEditor by mutableStateOf(false)
     /** lei aberta na explicação detalhada */
     var lawInfo by mutableStateOf<String?>(null)

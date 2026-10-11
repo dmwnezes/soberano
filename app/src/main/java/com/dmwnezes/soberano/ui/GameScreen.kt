@@ -71,7 +71,7 @@ fun GameScreen(
     onSwitchCountry: (Int) -> Unit,
     store: SaveStore,
 ) {
-    val camera = remember { MapCamera() }
+    val camera = c.camera
     var frame by remember { mutableLongStateOf(0L) }
     var nukeTargeting by remember { mutableStateOf(false) }
     var confirmNuke by remember { mutableStateOf(-1) }
@@ -125,7 +125,7 @@ fun GameScreen(
                     nukeTargeting = false
                     return@WorldMapView
                 }
-                val a = selArmy
+                val a = game.armies.firstOrNull { it.id == c.selArmy }
                 if (a != null && a.owner == game.player && p >= 0) {
                     if (p == a.province) { c.clearTarget(); c.selArmy = -1; c.selProvince = p; c.refresh(); return@WorldMapView }
                     // mostra o cartão de ordem: atacar, mover ou declarar guerra
@@ -133,6 +133,7 @@ fun GameScreen(
                 } else { c.clearTarget(); c.selectProvince(p) }
             },
             onTapArmy = { a ->
+                val selArmy = game.armies.firstOrNull { it.id == c.selArmy }
                 if (selArmy != null && selArmy.owner == game.player && a.owner != game.player) {
                     c.chooseTarget(a.province)
                 } else { c.clearTarget(); c.selArmy = if (c.selArmy == a.id) -1 else a.id; c.selProvince = -1; c.refresh() }
