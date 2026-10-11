@@ -1,0 +1,1 @@
+Bandeiras: flag-icons (MIT, github.com/lipis/flag-icons).
