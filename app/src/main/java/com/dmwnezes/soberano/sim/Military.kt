@@ -258,7 +258,7 @@ class Military(private val sim: Sim) {
 
     private fun techMult(n: Int, d: Domain): Float {
         val b = when (d) { Domain.LAND -> TechBranch.LAND; Domain.SEA -> TechBranch.SEA; Domain.AIR -> TechBranch.AIR }
-        return 1f + 0.05f * sim.nation(n).tech[b.ordinal]
+        return (1f + 0.05f * sim.nation(n).tech[b.ordinal]) * sim.policy.combatMult(n)
     }
 
     fun dailyCombat() {
@@ -466,6 +466,7 @@ class Military(private val sim: Sim) {
         for (w in game.armies) {
             if (w.domain != Domain.AIR || (w.owner != owner && !(sim.allied(w.owner, owner) && sim.atWar(w.owner, enemy)))) continue
             if (w.moving) continue
+            if (sim.unitedNations.has(ResolutionType.NO_FLY, w.owner)) continue
             val km = world.distanceKm(w.province, p)
             val tm = techMult(w.owner, Domain.AIR)
             var used = false
@@ -620,6 +621,7 @@ class Military(private val sim: Sim) {
         if (t == UnitType.INFANTRY && "servico_militar" in n.laws) c *= 0.85
         var discount = sim.dev.builtDiscount(n)
         if (n.id == game.player) discount += sim.dev.defenseDiscount()
+        if (sim.unitedNations.has(ResolutionType.ARMS_EMBARGO, n.id)) c *= 1.3
         return c * (1.0 - discount.coerceIn(-0.2f, 0.4f))
     }
 
@@ -655,6 +657,7 @@ class Military(private val sim: Sim) {
         if (!game.settings.nuclear) return "Armas nucleares estão desligadas"
         if (n.tech[TechBranch.NUCLEAR.ordinal] < 6) return "Precisa de tecnologia nuclear nível 6"
         if (n.nukeBuild > 0) return "Já há um míssil em produção"
+        if (sim.unitedNations.has(ResolutionType.DISARM, n.id)) return "A ONU proibiu suas armas nucleares"
         if (n.militaryFund + n.treasury < NUKE_COST) return "Dinheiro insuficiente"
         val fromFund = min(NUKE_COST, max(0.0, n.militaryFund))
         n.militaryFund -= fromFund; n.treasury -= NUKE_COST - fromFund

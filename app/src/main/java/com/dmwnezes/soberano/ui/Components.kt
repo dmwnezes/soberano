@@ -98,6 +98,17 @@ object GameIcons {
         "border" -> Icons.Rounded.Fence
         "leaf" -> Icons.Rounded.Eco
         "balance" -> Icons.Rounded.Balance
+        "plane" -> Icons.Rounded.AirplanemodeInactive
+        "gavel" -> Icons.Rounded.Gavel
+        "bank" -> Icons.Rounded.AccountBalance
+        "print" -> Icons.Rounded.Print
+        "savings" -> Icons.Rounded.Savings
+        "boost" -> Icons.Rounded.RocketLaunch
+        "cut" -> Icons.Rounded.ContentCut
+        "drill" -> Icons.Rounded.FitnessCenter
+        "mobilize" -> Icons.Rounded.Campaign
+        "mercs" -> Icons.Rounded.Payments
+        "ai" -> Icons.Rounded.AutoAwesome
         "temple" -> Icons.Rounded.Church
         "field" -> Icons.Rounded.Agriculture
         "lock" -> Icons.Rounded.Lock
@@ -191,19 +202,25 @@ fun Btn(
         BtnKind.DANGER -> Color(0xFF2A0B07)
         else -> Ink.text
     }
+    // desligado: fundo sólido e texto apagado (antes ficava quase invisível sobre o painel)
+    val fill = when {
+        !enabled -> Ink.raised
+        kind == BtnKind.GHOST -> Ink.raised
+        else -> bg
+    }
     Row(
-        modifier.clip(Shapes.chip).background(if (enabled) bg else bg.copy(alpha = 0.35f))
-            .let { if (kind == BtnKind.GHOST) it.border(1.dp, Ink.line, Shapes.chip) else it }
+        modifier.clip(Shapes.chip).background(fill)
+            .let { if (kind == BtnKind.GHOST || !enabled) it.border(1.dp, if (enabled) Ink.brass.copy(alpha = 0.55f) else Ink.line, Shapes.chip) else it }
             .clickable(enabled = enabled, onClick = onClick)
             .padding(horizontal = 16.dp, vertical = 11.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.Center,
     ) {
         if (icon != null) {
-            Icon(icon, null, tint = if (enabled) fg else fg.copy(alpha = 0.5f), modifier = Modifier.size(18.dp))
+            Icon(icon, null, tint = if (enabled) fg else Ink.muted, modifier = Modifier.size(18.dp))
             Spacer(Modifier.width(6.dp))
         }
-        Text(text, style = Type.label.copy(fontWeight = FontWeight.SemiBold), color = if (enabled) fg else fg.copy(alpha = 0.5f), maxLines = 1)
+        Text(text, style = Type.label.copy(fontWeight = FontWeight.SemiBold), color = if (enabled) fg else Ink.muted, maxLines = 1)
     }
 }
 

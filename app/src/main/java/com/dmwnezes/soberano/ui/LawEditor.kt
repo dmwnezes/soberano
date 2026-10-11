@@ -45,6 +45,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import kotlinx.coroutines.launch
 import com.dmwnezes.soberano.sim.Content
 import com.dmwnezes.soberano.sim.CustomLaw
 import com.dmwnezes.soberano.sim.LawAnalysis
@@ -67,15 +68,20 @@ fun LawEditor(c: GameController, onClose: () -> Unit) {
     val analysis = LawMaker.analyze(law, me, c.game.natGdp(me.id))
     val cost = c.sim.politics.lawCost(me, law, true)
 
+    var aiMode by remember { mutableStateOf(true) }
     Box(Modifier.fillMaxSize().background(Ink.panelSolid).statusBarsPadding().navigationBarsPadding().imePadding()) {
         Column(Modifier.fillMaxSize()) {
             Row(Modifier.fillMaxWidth().padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
                 Column(Modifier.weight(1f)) {
                     Text("Nova lei", style = Type.title, color = Ink.text)
-                    Text("Escolha até $MAX_MEASURES medidas e veja o que acontece", style = Type.small, color = Ink.muted)
+                    Text(if (aiMode) "Escreva a lei; a IA estima o que acontece" else "Escolha até $MAX_MEASURES medidas e veja o que acontece", style = Type.small, color = Ink.muted)
                 }
                 IconBtn(Icons.Rounded.Close, onClick = onClose)
             }
+            Box(Modifier.padding(horizontal = 16.dp).padding(bottom = 8.dp)) {
+                Segmented(listOf(true, false), aiMode, { if (it) "Escrever com IA" else "Montar com medidas" }) { aiMode = it }
+            }
+            if (aiMode) { AiLawPane(c, onClose); return@Column }
             Column(Modifier.weight(1f).verticalScroll(rememberScrollState()).padding(horizontal = 16.dp)) {
                 SearchField(name, LawMaker.suggestName(chosen).ifEmpty { "Nome da lei" }, Modifier.fillMaxWidth()) { if (it.length <= 40) name = it }
                 Spacer(Modifier.height(12.dp))
@@ -216,7 +222,15 @@ fun LawInfo(c: GameController, id: String, onClose: () -> Unit) {
         }
         Spacer(Modifier.height(10.dp))
         Column(Modifier.verticalScroll(rememberScrollState()).weight(1f, fill = false)) {
-            if (custom != null) {
+            if (custom?.free != null) {
+                Text("Texto da lei", style = Type.label, color = Ink.muted)
+                Text("“${custom.prompt}”", style = Type.body, color = Ink.text, modifier = Modifier.padding(vertical = 2.dp))
+                if (custom.free.notes.isNotEmpty()) {
+                    Text("O que muda", style = Type.label, color = Ink.muted, modifier = Modifier.padding(top = 8.dp))
+                    for (n in custom.free.notes) Text("• $n", style = Type.body, color = Ink.text, modifier = Modifier.padding(vertical = 2.dp))
+                }
+                Text(if (custom.free.ai) "Análise: IA do aparelho" else "Análise: interpretador local", style = Type.small, color = Ink.faint, modifier = Modifier.padding(top = 4.dp))
+            } else if (custom != null) {
                 Text("O que ela faz", style = Type.label, color = Ink.muted)
                 for (mid in custom.measures) LawMaker.byId[mid]?.let { m ->
                     Text("• ${m.does}", style = Type.body, color = Ink.text, modifier = Modifier.padding(vertical = 2.dp))
@@ -236,6 +250,121 @@ fun LawInfo(c: GameController, id: String, onClose: () -> Unit) {
                 c.act(if (active) "Lei revogada" else "Lei aprovada") { if (c.sim.politics.toggleLaw(me, id)) null else c.sim.politics.canEnact(me, law) ?: "Não foi possível" }
                 onClose()
             }
+        }
+    }
+}
+
+private val EXAMPLES = listOf(
+    "Semana de trabalho de 4 dias",
+    "Proibir celular nas escolas",
+    "Imposto sobre grandes fortunas",
+    "Transporte público gratuito",
+    "Privatizar os correios",
+    "Pena de prisão perpétua para corrupção",
+)
+
+/** Lei em texto livre: a IA do aparelho (ou o interpretador local) estima os efeitos. */
+@OptIn(androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
+@Composable
+private fun ColumnScope.AiLawPane(c: GameController, onClose: () -> Unit) {
+    @Suppress("UNUSED_EXPRESSION") c.tick
+    val me = c.me
+    val scope = androidx.compose.runtime.rememberCoroutineScope()
+    var text by remember { mutableStateOf("") }
+    var name by remember { mutableStateOf("") }
+    var busy by remember { mutableStateOf(false) }
+    var result by remember { mutableStateOf<com.dmwnezes.soberano.sim.Interpretation?>(null) }
+    var analyzedText by remember { mutableStateOf("") }
+    var mode by remember { mutableStateOf(com.dmwnezes.soberano.ai.LawAi.Mode.CHECKING) }
+    var progress by remember { mutableStateOf<String?>(null) }
+    androidx.compose.runtime.LaunchedEffect(Unit) { mode = com.dmwnezes.soberano.ai.LawAi.mode() }
+
+    val r = result
+    val law = r?.let { LawMaker.build(CustomLaw("custom_rascunho", name.ifBlank { it.name }, emptyList(), 2, analyzedText, it.law)) }
+    val analysis = law?.let { LawMaker.analyze(it, me, c.game.natGdp(me.id)) }
+    val cost = law?.let { c.sim.politics.lawCost(me, it, true) } ?: 0f
+    val stale = r != null && text.trim() != analyzedText
+
+    Column(Modifier.weight(1f).verticalScroll(rememberScrollState()).padding(horizontal = 16.dp)) {
+        // status da IA
+        Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(bottom = 8.dp)) {
+            Icon(GameIcons.of("ai"), null, tint = if (mode == com.dmwnezes.soberano.ai.LawAi.Mode.READY) Ink.good else Ink.muted, modifier = Modifier.size(16.dp))
+            Spacer(Modifier.width(6.dp))
+            Text(progress ?: mode.label, style = Type.small, color = Ink.muted, modifier = Modifier.weight(1f))
+        }
+        if (mode == com.dmwnezes.soberano.ai.LawAi.Mode.DOWNLOAD) {
+            Btn("Baixar a IA do aparelho (uma vez, use Wi-Fi)", Modifier.fillMaxWidth().padding(bottom = 8.dp), BtnKind.GHOST, GameIcons.of("ai")) {
+                mode = com.dmwnezes.soberano.ai.LawAi.Mode.DOWNLOADING
+                scope.launch {
+                    val ok = com.dmwnezes.soberano.ai.LawAi.download { p -> progress = p }
+                    progress = null
+                    mode = if (ok) com.dmwnezes.soberano.ai.LawAi.Mode.READY else com.dmwnezes.soberano.ai.LawAi.mode()
+                }
+            }
+        }
+        Box(Modifier.fillMaxWidth().height(130.dp).clip(Shapes.tile).background(Ink.raised).border(1.dp, Ink.line, Shapes.tile).padding(14.dp)) {
+            if (text.isEmpty()) Text("Ex.: Toda empresa com mais de 100 funcionários deve oferecer creche gratuita", style = Type.body, color = Ink.faint)
+            androidx.compose.foundation.text.BasicTextField(text, { if (it.length <= 600) text = it }, textStyle = Type.body.copy(color = Ink.text),
+                cursorBrush = androidx.compose.ui.graphics.SolidColor(Ink.brass), modifier = Modifier.fillMaxSize())
+        }
+        Spacer(Modifier.height(8.dp))
+        if (text.isBlank()) {
+            Text("Ideias", style = Type.small, color = Ink.muted)
+            Spacer(Modifier.height(4.dp))
+            androidx.compose.foundation.layout.FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                for (e in EXAMPLES) Text(e, style = Type.small, color = Ink.text,
+                    modifier = Modifier.clip(Shapes.chip).background(Ink.raised).clickable { text = e }.padding(horizontal = 12.dp, vertical = 7.dp))
+            }
+            Spacer(Modifier.height(8.dp))
+        }
+        Btn(if (busy) "Analisando…" else if (r == null || stale) "Analisar a lei" else "Analisar de novo", Modifier.fillMaxWidth(), BtnKind.PRIMARY, GameIcons.of("ai"),
+            enabled = !busy && text.trim().length >= 4) {
+            busy = true
+            val t = text.trim()
+            scope.launch {
+                val res = com.dmwnezes.soberano.ai.LawAi.interpret(t, me.name)
+                result = res; analyzedText = t; name = ""; busy = false
+            }
+        }
+        if (busy) {
+            Spacer(Modifier.height(10.dp))
+            androidx.compose.material3.LinearProgressIndicator(Modifier.fillMaxWidth(), color = Ink.brass, trackColor = Ink.raised)
+        }
+        if (r != null && analysis != null) {
+            if (stale) Text("Você mudou o texto: analise de novo para atualizar.", style = Type.small, color = Ink.amber, modifier = Modifier.padding(top = 8.dp))
+            SectionTitle("Nome")
+            SearchField(name, r.name, Modifier.fillMaxWidth()) { if (it.length <= 40) name = it }
+            Text(if (r.law.ai) "Análise feita pela IA do aparelho" else "Análise local por palavras-chave", style = Type.small, color = Ink.faint, modifier = Modifier.padding(top = 6.dp))
+            if (r.law.notes.isNotEmpty()) {
+                SectionTitle("O que muda")
+                for (n in r.law.notes) Row(Modifier.padding(vertical = 3.dp), verticalAlignment = Alignment.Top) {
+                    Icon(GameIcons.of(r.law.icon), null, tint = Ink.brass, modifier = Modifier.size(16.dp).padding(top = 2.dp))
+                    Spacer(Modifier.width(8.dp))
+                    Text(n, style = Type.body, color = Ink.text)
+                }
+            }
+            Consequences(analysis)
+            Spacer(Modifier.height(12.dp))
+            Panel(Modifier.fillMaxWidth()) {
+                Row {
+                    Cell("Aprovação", (if (analysis.approvalDelta >= 0) "+" else "") + Fmt.one(analysis.approvalDelta), if (analysis.approvalDelta >= 0) Ink.good else Ink.coral)
+                    Cell("Custo para aprovar", "⚡${cost.toInt()}", if (me.politicalCapital >= cost) Ink.brass else Ink.coral)
+                    Cell("Seu capital", "⚡${me.politicalCapital.toInt()}")
+                }
+            }
+        }
+        Spacer(Modifier.height(20.dp))
+    }
+    Row(Modifier.fillMaxWidth().padding(16.dp), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+        val ready = r != null && !busy
+        Btn("Salvar rascunho", Modifier.weight(1f), BtnKind.GHOST, enabled = ready) {
+            val cl = LawMaker.createFree(c.game, name.ifBlank { r!!.name }, analyzedText, r!!.law)
+            c.say("Lei \"${cl.name}\" guardada", 1, "law"); onClose()
+        }
+        Btn("Aprovar agora", Modifier.weight(1f), BtnKind.PRIMARY, Icons.Rounded.Gavel, enabled = ready && me.politicalCapital >= cost) {
+            val cl = LawMaker.createFree(c.game, name.ifBlank { r!!.name }, analyzedText, r!!.law)
+            if (!c.sim.politics.toggleLaw(me, cl.id)) c.say("Capital político insuficiente; a lei ficou guardada", 2)
+            onClose()
         }
     }
 }

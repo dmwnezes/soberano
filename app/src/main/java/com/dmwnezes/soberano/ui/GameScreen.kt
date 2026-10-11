@@ -217,6 +217,11 @@ fun GameScreen(
             else ElectionCard(c)
         }
         if (c.showPaper) NewspaperOverlay(c)
+        when (c.dialog) {
+            "spread" -> SpreadDialog(c) { c.dialog = null }
+            "gather" -> GatherDialog(c) { c.dialog = null }
+            "disband" -> game.armies.firstOrNull { it.id == c.selArmy }?.let { DisbandDialog(c, it) } ?: run { c.dialog = null }
+        }
         if (c.showSearch) ProvinceSearch(c) { p ->
             c.showSearch = false; c.focusRequest = p; c.selectProvince(p)
         }
@@ -506,9 +511,13 @@ private fun ProvinceCard(c: GameController, p: Int) {
         FortRow(c, p)
         if (g.owner[p] == me && ctrl == me) {
             val isRally = g.rallyPoint == p
-            Text(if (isRally) "Ponto de reunião dos reservistas" else "Tornar ponto de reunião dos reservistas",
+            Text(if (isRally) "Ponto de reunião · toque para treinar em todos os estados" else "Concentrar reservistas aqui",
                 style = Type.small, color = if (isRally) Ink.good else Ink.verdigris,
-                modifier = Modifier.padding(top = 8.dp).clip(Shapes.chip).clickable(enabled = !isRally) { g.rallyPoint = p; c.say("Reservistas vão chegar em ${pr.name}", 1, "flag"); c.refresh() }.padding(vertical = 4.dp))
+                modifier = Modifier.padding(top = 8.dp).clip(Shapes.chip).clickable {
+                    if (isRally) { g.rallyPoint = -1; c.say("Reservistas treinam em todos os estados", 1, "flag") }
+                    else { g.rallyPoint = p; c.say("Reservistas vão chegar em ${pr.name}", 1, "flag") }
+                    c.refresh()
+                }.padding(vertical = 4.dp))
         }
         Spacer(Modifier.height(12.dp))
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -586,6 +595,25 @@ private fun ArmyCard(c: GameController, a: Army) {
                 }
                 val others = g.armies.count { it.owner == a.owner && it.province == a.province && it.domain == a.domain && it.id != a.id && !it.moving }
                 if (others > 0) Btn("Juntar", Modifier.weight(1f), icon = Icons.Rounded.MergeType) { c.sim.military.mergeAllAt(a); c.refresh() }
+                if (!a.battle) IconBtn(Icons.Rounded.PersonRemove, size = 44.dp, tint = Ink.coral) { c.dialog = "disband" }
+            }
+        }
+    }
+}
+
+@Composable
+private fun DisbandDialog(c: GameController, a: Army) {
+    Overlay({ c.dialog = null }) {
+        Text("Desmobilizar ${a.name}?", style = Type.heading, color = Ink.text)
+        Text(if (a.domain == Domain.LAND) "As tropas voltam para casa e param de custar manutenção. Metade da infantaria vira reservista neste estado."
+            else "As unidades são aposentadas e param de custar manutenção.", style = Type.small, color = Ink.muted)
+        Spacer(Modifier.height(14.dp))
+        Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+            Btn("Cancelar", Modifier.weight(1f), BtnKind.GHOST) { c.dialog = null }
+            Btn("Desmobilizar", Modifier.weight(1f), BtnKind.DANGER) {
+                c.dialog = null
+                c.act("${a.name} desmobilizado") { c.sim.policy.disband(a) }
+                c.selArmy = -1; c.refresh()
             }
         }
     }

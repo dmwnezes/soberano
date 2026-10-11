@@ -209,6 +209,20 @@ class Ai(private val sim: Sim) {
         // ódio vira sanção
         for (o in neighborsOf(n.id)) if (game.rel(n.id, o) < -70f && sim.randf() < 0.05f &&
             game.treaties.none { it.type == TreatyType.SANCTION && it.a == n.id && it.b == o }) sim.diplomacy.sanction(n.id, o, false)
+        // mobilização geral em guerra longa; desmobiliza na paz
+        if (!n.mobilized && sim.atWarAny(n.id) && n.politicalCapital >= sim.policy.mobilizeCost + 10f && sim.randf() < 0.1f) sim.policy.toggleMobilization(n)
+        else if (n.mobilized && !sim.atWarAny(n.id)) n.mobilized = false
+        // sanções antigas são retiradas quando a relação melhora ou já não há motivo
+        for (t in game.treaties.filter { (it.type == TreatyType.SANCTION || it.type == TreatyType.EMBARGO) && it.a == n.id }) {
+            if (sim.atWar(n.id, t.b)) continue
+            val age = game.day - t.start
+            val rel = game.rel(n.id, t.b)
+            val chance = when { age < 300 -> 0f; rel > -10f -> 0.25f; rel > -40f -> 0.08f; else -> 0.02f }
+            if (chance > 0f && sim.randf() < chance) {
+                sim.diplomacy.sanction(n.id, t.b, t.type == TreatyType.EMBARGO)
+                if (t.b == game.player) sim.feed("handshake", "${n.name} retirou ${t.type.label.lowercase()} contra você", 1)
+            }
+        }
     }
 
     private fun <T> Collection<T>.shuffledBy(): List<T> {

@@ -223,6 +223,21 @@ class Nation(
     var reserves: Float = 0f,
     val projects: MutableList<ProjectBuild> = mutableListOf(),
     val built: MutableSet<String> = mutableSetOf(),
+
+    // política econômica
+    /** juros do banco central (% ao ano) */
+    var policyRate: Float = 6f,
+    /** dinheiro impresso recentemente (% do PIB), pressiona a inflação e decai */
+    var printed: Float = 0f,
+    var sovereignFund: Double = 0.0,
+    var stimulusUntil: Int = -1,
+    var austerityUntil: Int = -1,
+
+    // opções militares
+    var mobilized: Boolean = false,
+    var drillUntil: Int = -1,
+    var lastBombing: Int = -999,
+    var lastMercs: Int = -999,
 )
 
 @Serializable
@@ -338,6 +353,8 @@ class Game(
     var autoMerge: Boolean = true,
     /** onde chegam os reservistas do jogador (-1 = capital) */
     var rallyPoint: Int = -1,
+    /** tropas no mapa: 0 todas, 1 só as minhas, 2 ocultas (batalhas continuam aparecendo) */
+    var troopFilter: Int = 0,
     val ministers: MutableList<Minister> = mutableListOf(),
     val candidates: MutableList<Minister> = mutableListOf(),
     val history: MutableList<HistoryPoint> = mutableListOf(),
@@ -347,6 +364,8 @@ class Game(
     var fort: IntArray = IntArray(0),
     /** dias que faltam para terminar a obra de fortificação (0 = nada em obra) */
     var fortBuild: IntArray = IntArray(0),
+    /** reservistas em treinamento em cada província (viram divisão ao chegar a 1) */
+    var reserveAcc: FloatArray = FloatArray(0),
     /** generais esperando nomeação (oferecidos ao jogador) */
     val generalPool: MutableList<General> = mutableListOf(),
     val un: UnState = UnState(),
@@ -372,6 +391,7 @@ class Game(
     fun ensureArrays() {
         if (fort.size != owner.size) fort = IntArray(owner.size)
         if (fortBuild.size != owner.size) fortBuild = IntArray(owner.size)
+        if (reserveAcc.size != owner.size) reserveAcc = FloatArray(owner.size)
     }
 
     /** Aumenta a matriz de relações para caber um país novo. */
@@ -420,7 +440,12 @@ class TreatyCache(val keys: HashSet<Long>, val allied: BooleanArray) {
 
 /** Lei montada pelo jogador a partir de medidas (ver LawMaker). */
 @Serializable
-class CustomLaw(val id: String, var name: String, val measures: List<String>, val intensity: Int = 2)
+class CustomLaw(
+    val id: String, var name: String, val measures: List<String>, val intensity: Int = 2,
+    /** lei escrita em texto: o texto original e os efeitos estimados */
+    val prompt: String = "",
+    val free: FreeLaw? = null,
+)
 
 @Serializable
 class ProjectBuild(val id: String, var monthsLeft: Int, val total: Int)
@@ -467,13 +492,24 @@ class General(
 
 // ---------------------------------------------------------------- ONU
 
-enum class ResolutionType(val label: String, val icon: String) {
-    SANCTIONS("Sanções coletivas", "block"),
+enum class ResolutionType(val label: String, val icon: String, val hostile: Boolean = false, val needsTarget: Boolean = true) {
+    SANCTIONS("Sanções coletivas", "block", true),
     PEACEKEEPING("Missão de paz", "dove"),
-    CONDEMN("Condenação", "alert"),
+    CONDEMN("Condenação", "alert", true),
     AID("Ajuda humanitária", "handshake"),
-    CLIMATE("Acordo do clima", "leaf"),
+    CLIMATE("Acordo do clima", "leaf", needsTarget = false),
+    LIFT_SANCTIONS("Suspender sanções", "handshake"),
+    ARMS_EMBARGO("Embargo de armas", "block", true),
+    NO_FLY("Zona de exclusão aérea", "plane", true),
+    DISARM("Desarmamento nuclear", "nuke", true),
+    RECONSTRUCTION("Fundo de reconstrução", "factory"),
+    SUSPEND("Suspender da ONU", "gavel", true),
+    TRIBUNAL("Tribunal internacional", "gavel", true),
 }
+
+/** Efeito duradouro de uma resolução aprovada. */
+@Serializable
+class UnEffect(val type: ResolutionType, val target: Int, val until: Int)
 
 @Serializable
 class Resolution(
@@ -501,6 +537,7 @@ class UnState(
     /** prazo do acordo do clima em vigor */
     var climateUntil: Int = -1,
     val climateMembers: MutableList<Int> = mutableListOf(),
+    val effects: MutableList<UnEffect> = mutableListOf(),
 )
 
 // ---------------------------------------------------------------- comércio

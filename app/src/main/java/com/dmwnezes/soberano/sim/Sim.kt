@@ -21,6 +21,7 @@ class Sim(val world: WorldMap, val game: Game) {
     val civil = CivilWars(this)
     val unitedNations = UnitedNations(this)
     val news = News(this)
+    val policy = Policies(this)
 
     init {
         LawMaker.register(game)
@@ -152,6 +153,7 @@ class Sim(val world: WorldMap, val game: Game) {
         game.invalidate()
         for (n in game.nations) if (n.alive) {
             economy.monthly(n)
+            policy.monthly(n)
             politics.monthly(n)
         }
         military.monthlyResistance()

@@ -211,7 +211,7 @@ fun UnVoteCard(c: GameController) {
                     Text("$n não", style = Type.small, color = Ink.coral, modifier = Modifier.weight(1f), textAlign = TextAlign.End)
                 }
                 if (veto != null) Text("${c.sim.nation(veto).name} deve vetar", style = Type.small, color = Ink.amber, modifier = Modifier.padding(top = 6.dp))
-                if (un.isPermanent(c.game.player) && veto == null && r.type != ResolutionType.AID && r.type != ResolutionType.CLIMATE)
+                if (un.isPermanent(c.game.player) && veto == null && (r.type.hostile || r.type == ResolutionType.PEACEKEEPING || r.type == ResolutionType.LIFT_SANCTIONS))
                     Text("Você é membro permanente: votar não é veto", style = Type.small, color = Ink.brass, modifier = Modifier.padding(top = 6.dp))
             }
         }
@@ -233,15 +233,27 @@ fun WorldUn(c: GameController) {
     var proposing by remember { mutableStateOf(false) }
     SheetBody {
         Spacer(Modifier.height(8.dp))
-        Text("Sessões a cada 5 a 8 meses. Membros permanentes (EUA, Rússia, China, Reino Unido e França) podem vetar sanções, condenações e missões de paz.",
+        Text("Sessões a cada 5 a 8 meses. Membros permanentes (EUA, Rússia, China, Reino Unido e França) podem vetar medidas contra países, missões de paz e fim de sanções.",
             style = Type.small, color = Ink.muted)
         Spacer(Modifier.height(10.dp))
         Btn("Propor resolução (⚡${un.proposeCost.toInt()})", Modifier.fillMaxWidth(), BtnKind.PRIMARY, Icons.Rounded.Gavel,
-            enabled = g.un.pending == null && c.me.politicalCapital >= un.proposeCost) { proposing = true }
+            enabled = g.un.pending == null && c.me.politicalCapital >= un.proposeCost && !un.suspended(g.player)) { proposing = true }
         if (g.un.climateUntil >= g.day) {
             Spacer(Modifier.height(8.dp))
             Text("Acordo do clima em vigor até ${dateText(g.un.climateUntil)} (${g.un.climateMembers.size} países)" +
                 if (g.player in g.un.climateMembers) ", com você" else "", style = Type.small, color = Ink.good)
+        }
+        if (un.suspended(g.player)) Text("Seu país está suspenso da ONU até ${dateText(un.until(com.dmwnezes.soberano.sim.ResolutionType.SUSPEND, g.player))}: não vota nem propõe.",
+            style = Type.small, color = Ink.coral, modifier = Modifier.padding(top = 8.dp))
+        val active = g.un.effects.filter { it.until >= g.day }
+        if (active.isNotEmpty()) {
+            SectionTitle("Em vigor")
+            for (e in active.sortedBy { it.until }) Row(Modifier.fillMaxWidth().padding(vertical = 3.dp), verticalAlignment = Alignment.CenterVertically) {
+                Icon(GameIcons.of(e.type.icon), null, tint = if (e.target == g.player) Ink.coral else Ink.muted, modifier = Modifier.size(16.dp))
+                Spacer(Modifier.width(8.dp))
+                Text("${e.type.label}: ${c.sim.nation(e.target).name}", style = Type.small, color = if (e.target == g.player) Ink.coral else Ink.text, modifier = Modifier.weight(1f), maxLines = 1, overflow = TextOverflow.Ellipsis)
+                Text("até ${dateText(e.until)}", style = Type.small, color = Ink.faint)
+            }
         }
         SectionTitle("Últimas resoluções")
         if (g.un.history.isEmpty()) Text("Nenhuma votação ainda.", style = Type.body, color = Ink.muted)
@@ -277,16 +289,15 @@ private fun ProposeDialog(c: GameController, onClose: () -> Unit) {
             Spacer(Modifier.height(12.dp))
             val t = type
             if (t == null) {
-                for (rt in ResolutionType.entries) ActionRow(GameIcons.of(rt.icon), rt.label, when (rt) {
-                    ResolutionType.SANCTIONS -> "Todos que votarem sim sancionam o país"
-                    ResolutionType.PEACEKEEPING -> "Encerra uma guerra em paz branca"
-                    ResolutionType.CONDEMN -> "O mundo se afasta do país"
-                    ResolutionType.AID -> "Países ricos doam a um país necessitado"
-                    ResolutionType.CLIMATE -> "Mais meio ambiente, um pouco menos de crescimento"
-                }, enabled = rt != ResolutionType.CLIMATE || g.un.climateUntil < g.day) {
-                    if (rt == ResolutionType.CLIMATE) { c.act("Resolução enviada à ONU") { c.sim.unitedNations.propose(rt, -1) }; onClose() } else type = rt
+                Column(Modifier.verticalScroll(rememberScrollState())) {
+                    for (rt in ResolutionType.entries) ActionRow(GameIcons.of(rt.icon), rt.label, c.sim.unitedNations.explain(rt),
+                        enabled = rt != ResolutionType.CLIMATE || g.un.climateUntil < g.day) {
+                        if (rt == ResolutionType.CLIMATE) { c.act("Resolução enviada à ONU") { c.sim.unitedNations.propose(rt, -1) }; onClose() } else type = rt
+                    }
                 }
             } else {
+                Text(c.sim.unitedNations.explain(t), style = Type.small, color = Ink.muted)
+                Spacer(Modifier.height(8.dp))
                 Column(Modifier.verticalScroll(rememberScrollState())) {
                     if (t == ResolutionType.PEACEKEEPING) {
                         if (g.wars.isEmpty()) Text("Não há guerras.", style = Type.body, color = Ink.muted)
@@ -294,17 +305,27 @@ private fun ProposeDialog(c: GameController, onClose: () -> Unit) {
                             c.act("Resolução enviada à ONU") { c.sim.unitedNations.propose(t, w.leaderA(), w.leaderD()) }; onClose()
                         }
                     } else {
-                        val list = g.nations.filter { it.alive && it.id != g.player }.sortedWith(compareByDescending<Nation> { c.sim.atWar(g.player, it.id) }.thenBy { g.rel(g.player, it.id) })
-                        for (n in list.take(80)) Row(
-                            Modifier.fillMaxWidth().clip(Shapes.small).clickable {
-                                c.act("Resolução enviada à ONU") { c.sim.unitedNations.propose(t, n.id) }; onClose()
-                            }.padding(vertical = 9.dp, horizontal = 4.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                        ) {
-                            FlagView(n, 20.dp)
-                            Spacer(Modifier.width(10.dp))
-                            Text(n.name, style = Type.body, color = Ink.text, modifier = Modifier.weight(1f))
-                            RelationBadge(g.rel(g.player, n.id))
+                        val un = c.sim.unitedNations
+                        val list = g.nations.filter { it.alive && (it.id != g.player || !t.hostile) }
+                            .sortedWith(compareByDescending<Nation> { it.id == g.player }.thenBy { un.proposeRefusal(t, it.id) != null }
+                                .thenByDescending { c.sim.atWar(g.player, it.id) }.thenBy { if (t.hostile) g.rel(g.player, it.id) else -g.rel(g.player, it.id) })
+                        for (n in list.take(90)) {
+                            val why = un.proposeRefusal(t, n.id)
+                            Row(
+                                Modifier.fillMaxWidth().clip(Shapes.small).clickable {
+                                    c.act("Resolução enviada à ONU") { un.propose(t, n.id) }; onClose()
+                                }.padding(vertical = 9.dp, horizontal = 4.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
+                                FlagView(n, 20.dp)
+                                Spacer(Modifier.width(10.dp))
+                                Column(Modifier.weight(1f)) {
+                                    Text(if (n.id == g.player) "${n.name} (você)" else n.name, style = Type.body, color = if (why == null) Ink.text else Ink.faint)
+                                    if (why != null) Text(why, style = Type.small, color = Ink.faint)
+                                    else if (t == ResolutionType.LIFT_SANCTIONS) Text("${un.sanctionedBy(n.id)} sanções", style = Type.small, color = Ink.muted)
+                                }
+                                if (n.id != g.player) RelationBadge(g.rel(g.player, n.id))
+                            }
                         }
                     }
                 }
@@ -488,7 +509,7 @@ private fun ColumnScope.PaperSection(title: String, items: List<String>, ink: Co
     for (t in items) Text("▪ $t", style = Type.body.copy(fontFamily = serif, fontSize = 15.sp), color = ink, modifier = Modifier.padding(vertical = 3.dp))
 }
 
-private fun dateText(day: Int): String {
+internal fun dateText(day: Int): String {
     val d = START_DATE.plusDays(day.toLong())
     return "${d.dayOfMonth}/${d.monthValue}/${d.year}"
 }
@@ -575,6 +596,15 @@ fun MapShortcuts(c: GameController, onMyCountry: () -> Unit) {
     Column(horizontalAlignment = Alignment.End, verticalArrangement = Arrangement.spacedBy(8.dp)) {
         IconBtn(Icons.Rounded.Search, bg = Ink.panel, size = 44.dp) { c.showSearch = true }
         IconBtn(Icons.Rounded.MyLocation, bg = Ink.panel, size = 44.dp) { onMyCountry() }
+        val f = c.game.troopFilter
+        IconBtn(
+            when (f) { 0 -> Icons.Rounded.Groups; 1 -> Icons.Rounded.Person; else -> Icons.Rounded.VisibilityOff },
+            bg = if (f == 0) Ink.panel else Ink.brass.copy(alpha = 0.85f), tint = if (f == 0) Ink.text else Ink.onBrass, size = 44.dp,
+        ) {
+            c.game.troopFilter = (f + 1) % 3
+            c.say(when (c.game.troopFilter) { 0 -> "Mostrando todas as tropas"; 1 -> "Mostrando só as suas tropas"; else -> "Tropas ocultas (batalhas aparecem)" }, 0)
+            c.refresh()
+        }
     }
 }
 

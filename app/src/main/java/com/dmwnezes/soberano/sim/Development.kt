@@ -151,6 +151,8 @@ class Development(private val sim: Sim) {
 
     fun armsRefusal(seller: Int, buyer: Int, t: UnitType, qty: Int): String? {
         if (sim.atWar(seller, buyer)) return "Estão em guerra"
+        if (sim.unitedNations.has(ResolutionType.ARMS_EMBARGO, buyer)) return "A ONU proibiu vender armas a eles"
+        if (sim.unitedNations.has(ResolutionType.ARMS_EMBARGO, seller)) return "Você está sob embargo de armas da ONU"
         if (game.rel(seller, buyer) < 10f) return "Relação precisa chegar a 10"
         if (armsAvailable(seller, t) < qty) return "Você não tem $qty ${t.label.lowercase()} paradas"
         if (sim.nation(buyer).treasury < armsPrice(t, qty)) return "Eles não têm ${Fmt.money(armsPrice(t, qty))}"
@@ -394,7 +396,7 @@ class Development(private val sim: Sim) {
     // ============================================================ reservistas automáticos
 
     /** Teto de divisões terrestres sustentadas pela população. */
-    fun manpowerCap(n: Int): Float = (sqrt(game.natPop(n) / 1e6) * 10.0).toFloat().coerceAtLeast(4f)
+    fun manpowerCap(n: Int): Float = (sqrt(game.natPop(n) / 1e6) * 10.0).toFloat().coerceAtLeast(4f) * (if (sim.nation(n).mobilized) 1.5f else 1f)
 
     /** Divisões novas por mês que os estados do país treinam sozinhos. */
     fun recruitRate(n: Nation): Float {
@@ -403,29 +405,98 @@ class Development(private val sim: Sim) {
         val stab = 0.6f + n.stability / 250f
         val war = if (sim.atWarAny(n.id)) 1.6f else 1f
         val law = if ("servico_militar" in n.laws) 1.4f else 1f
-        return (pop / 120e6).toFloat().coerceAtLeast(0.15f) * def * stab * war * law
+        val mob = if (n.mobilized) 2.5f else 1f
+        return (pop / 120e6).toFloat().coerceAtLeast(0.15f) * def * stab * war * law * mob
     }
 
     fun landDivisions(n: Int): Float = game.armies.filter { it.owner == n && it.domain == Domain.LAND }.sumOf { it.divisions().toDouble() }.toFloat()
 
     private fun monthlyRecruits(n: Nation) {
         if (game.natProvinces(n.id) == 0) return
+        game.ensureArrays()
         val cap = manpowerCap(n.id)
-        val have = landDivisions(n.id)
-        if (have >= cap) return
-        n.reserves += recruitRate(n) * (if (n.militaryFund < 0) 0.5f else 1f)
-        if (n.reserves < 1f) return
-        val count = min(n.reserves.toInt().toFloat(), cap - have).coerceAtLeast(0f)
-        if (count < 1f) return
-        n.reserves -= count
-        val spot = recruitSpot(n) ?: return
-        val a = game.armies.firstOrNull { it.owner == n.id && it.province == spot && it.domain == Domain.LAND && !it.moving && !it.battle }
-            ?: sim.military.newArmy(n.id, spot, Domain.LAND)
-        a.units[UnitType.INFANTRY.ordinal] += count
-        if (n.id == game.player) {
-            val k = count.toInt()
-            sim.feed("military", "+$k ${if (k == 1) "divisão" else "divisões"} de reservistas em ${world.provinces[spot].name}", 0)
+        var room = cap - landDivisions(n.id)
+        if (room <= 0f) return
+        val monthRate = recruitRate(n) * (if (n.militaryFund < 0) 0.5f else 1f)
+        val spots = recruitSpots(n)
+        if (spots.isEmpty()) return
+        if (n.id != game.player || spots.size == 1) {
+            // computador (ou ponto de reunião): reserva nacional, divisões inteiras repartidas entre os pontos
+            n.reserves += monthRate
+            val count = min(n.reserves.toInt(), room.toInt())
+            if (count < 1) return
+            n.reserves -= count
+            for (i in 0 until count) {
+                val p = spots[i % spots.size]
+                val a = game.armies.firstOrNull { it.owner == n.id && it.province == p && it.domain == Domain.LAND && !it.moving && !it.battle }
+                    ?: sim.military.newArmy(n.id, p, Domain.LAND)
+                a.units[UnitType.INFANTRY.ordinal] += 1f
+            }
+            if (n.id == game.player) sim.feed("military", "+$count ${if (count == 1) "divisão" else "divisões"} de reservistas em ${world.provinces[spots[0]].name}", 0)
+            return
         }
+        n.reserves = 0f // o treino do jogador acontece em cada estado (reserveAcc)
+        // peso: raiz da população, para estados pequenos também treinarem
+        val w = FloatArray(spots.size) { sqrt(game.provPop[spots[it]].coerceAtLeast(1.0)).toFloat() }
+        val total = w.sum().coerceAtLeast(1e-6f)
+        var made = 0
+        var places = 0
+        var last = -1
+        for ((i, p) in spots.withIndex()) {
+            if (room <= 0f) break
+            val share = monthRate * w[i] / total
+            val here = game.armies.firstOrNull { it.owner == n.id && it.province == p && it.domain == Domain.LAND && !it.moving && !it.battle }
+            if (here != null) {
+                // há tropa parada no estado: o reforço entra direto, todo mês, em todos os estados
+                val add = min(share + game.reserveAcc[p], room)
+                here.units[UnitType.INFANTRY.ordinal] += add
+                game.reserveAcc[p] = 0f
+                room -= add
+                if (add >= 0.05f) { places++; last = p }
+                continue
+            }
+            game.reserveAcc[p] += share
+            if (game.reserveAcc[p] >= 1f) {
+                val k = min(game.reserveAcc[p].toInt().toFloat(), room)
+                if (k < 1f) continue
+                game.reserveAcc[p] -= k
+                room -= k
+                val a = sim.military.newArmy(n.id, p, Domain.LAND)
+                a.units[UnitType.INFANTRY.ordinal] += k
+                made += k.toInt(); places++; last = p
+            }
+        }
+        if (n.id == game.player && places > 0) {
+            val text = if (places == 1) "Reservistas chegaram em ${world.provinces[last].name}"
+            else "Reservistas reforçaram $places estados" + if (made > 0) " (+$made ${if (made == 1) "divisão nova" else "divisões novas"})" else ""
+            sim.feed("military", text, 0)
+        }
+    }
+
+    /** Divisões em treinamento somadas em todos os estados (para a interface). */
+    fun reservesInTraining(n: Int): Float {
+        game.ensureArrays()
+        var s = 0f
+        for (p in sim.provincesOf(n)) s += game.reserveAcc[p]
+        return s
+    }
+
+    /**
+     * Onde os reservistas se formam.
+     * Jogador: todos os estados que controla (ou só o ponto de reunião, se marcado).
+     * Computador: até 8 estados — a frente de batalha primeiro, depois os mais populosos.
+     */
+    fun recruitSpots(n: Nation): List<Int> {
+        val mine = sim.provincesOf(n.id).filter { game.controller[it] == n.id }
+        if (mine.isEmpty()) return emptyList()
+        if (n.id == game.player) {
+            val rp = game.rallyPoint
+            if (rp >= 0 && game.controller[rp] == n.id) return listOf(rp)
+            return mine
+        }
+        val front = mine.filter { p -> world.provinces[p].neighbors.any { q -> sim.atWar(n.id, game.controller[q]) } }
+        val byPop = mine.sortedByDescending { game.provPop[it] }
+        return (front.sortedByDescending { game.provPop[it] } + byPop).distinct().take(8)
     }
 
     /** Jogador: ponto de reunião ou capital. Computador: frente de batalha, fronteira tensa ou capital. */

@@ -157,51 +157,89 @@ class UnitedNations(private val sim: Sim) {
     fun monthly() {
         val un = game.un
         if (un.climateUntil in 0 until game.day) { un.climateUntil = -1; un.climateMembers.clear() }
+        if (un.effects.removeAll { it.until < game.day || !sim.nation(it.target).alive }) sim.touch()
         if (un.pending != null || game.day < un.nextSession) return
         un.nextSession = game.day + 150 + sim.randInt(90)
         auto()?.let { open(it) }
     }
 
+    fun has(type: ResolutionType, n: Int) = game.un.effects.any { it.type == type && it.target == n && it.until >= game.day }
+    fun until(type: ResolutionType, n: Int) = game.un.effects.filter { it.type == type && it.target == n }.maxOfOrNull { it.until } ?: -1
+    fun suspended(n: Int) = has(ResolutionType.SUSPEND, n)
+    fun sanctionedBy(n: Int) = game.treaties.count { (it.type == TreatyType.SANCTION || it.type == TreatyType.EMBARGO) && it.b == n }
+    private fun hasNukes(n: Nation) = n.nukes > 0 || n.nukeBuild > 0
+
     /** Escolhe o tema da sessão. */
     private fun auto(): Resolution? {
         val options = ArrayList<Resolution>()
-        val proposer = game.nations.filter { it.alive && it.id != game.player && it.regime.democratic }
+        val proposer = game.nations.filter { it.alive && it.id != game.player && it.regime.democratic && !suspended(it.id) }
             .maxByOrNull { game.natGdp(it.id) }?.id ?: return null
-        // guerras de agressão viram sanção ou missão de paz
+        fun add(t: ResolutionType, target: Int, other: Int = -1) { options += Resolution(t, target, other, proposer, game.day) }
+        // guerras de agressão viram sanção, embargo de armas, zona de exclusão ou missão de paz
         for (w in game.wars) {
             if (game.day - w.start < 60) continue
             val a = w.leaderA(); val d = w.leaderD()
             if (a == proposer || d == proposer) continue
-            options += Resolution(ResolutionType.PEACEKEEPING, a, d, proposer, game.day)
-            if (sim.diplomacy.warScore(w, a) > 10f) options += Resolution(ResolutionType.SANCTIONS, a, -1, proposer, game.day)
+            add(ResolutionType.PEACEKEEPING, a, d)
+            if (sim.diplomacy.warScore(w, a) > 10f) add(ResolutionType.SANCTIONS, a)
+            if (!has(ResolutionType.ARMS_EMBARGO, a)) add(ResolutionType.ARMS_EMBARGO, a)
+            if (!has(ResolutionType.NO_FLY, a) && game.armies.any { it.owner == a && it.domain == Domain.AIR }) add(ResolutionType.NO_FLY, a)
+            if (game.day - w.start > 365 && !suspended(a)) add(ResolutionType.SUSPEND, a)
         }
-        // regime mais instável e repressivo é condenado
+        // regime mais instável e repressivo é condenado (ou vai ao tribunal)
         game.nations.filter { it.alive && !it.regime.democratic && it.stability < 35f && it.id != proposer }
-            .minByOrNull { it.stability }?.let { options += Resolution(ResolutionType.CONDEMN, it.id, -1, proposer, game.day) }
+            .minByOrNull { it.stability }?.let {
+                add(ResolutionType.CONDEMN, it.id)
+                if (it.stability < 25f) add(ResolutionType.TRIBUNAL, it.id)
+            }
+        // ditaduras com bomba
+        game.nations.firstOrNull { it.alive && it.id != proposer && !it.regime.democratic && hasNukes(it) && !has(ResolutionType.DISARM, it.id) && game.rel(proposer, it.id) < 0f }
+            ?.let { add(ResolutionType.DISARM, it.id) }
         // país pobre com saúde ruim recebe ajuda
         game.nations.filter { it.alive && it.income <= 2 }.minByOrNull { it.index[Area.HEALTH.ordinal] }
-            ?.let { options += Resolution(ResolutionType.AID, it.id, -1, proposer, game.day) }
-        if (game.un.climateUntil < 0) options += Resolution(ResolutionType.CLIMATE, -1, -1, proposer, game.day)
+            ?.let { add(ResolutionType.AID, it.id) }
+        // país em paz que saiu destruído recebe fundo de reconstrução
+        game.nations.filter { it.alive && !sim.atWarAny(it.id) && it.index[Area.INFRA.ordinal] < 40f && !has(ResolutionType.RECONSTRUCTION, it.id) }
+            .minByOrNull { it.index[Area.INFRA.ordinal] }?.let { add(ResolutionType.RECONSTRUCTION, it.id) }
+        // sanções antigas contra quem já está em paz podem ser suspensas
+        game.nations.filter { it.alive && it.id != proposer && !sim.atWarAny(it.id) && sanctionedBy(it.id) >= 3 &&
+            game.treaties.any { t -> t.type == TreatyType.SANCTION && t.b == it.id && game.day - t.start > 365 } }
+            .maxByOrNull { sanctionedBy(it.id) }?.let { add(ResolutionType.LIFT_SANCTIONS, it.id) }
+        if (game.un.climateUntil < 0) add(ResolutionType.CLIMATE, -1)
         return if (options.isEmpty()) null else sim.pick(options)
     }
 
     /** Abre a votação. Se o jogador não puder votar, resolve na hora. */
     fun open(r: Resolution) {
         game.un.pending = r
-        if (!sim.player.alive) resolve(0)
+        if (!sim.player.alive || suspended(game.player)) resolve(0)
         else sim.feed("bloc", "ONU vota: ${title(r)}", 1)
         sim.touch()
     }
 
-    /** O jogador propõe uma resolução (custa capital político). */
-    fun propose(type: ResolutionType, target: Int, other: Int = -1): String? {
+    /** Motivo para não poder propor (null = pode). */
+    fun proposeRefusal(type: ResolutionType, target: Int, other: Int = -1): String? {
         val me = sim.player
         if (game.un.pending != null) return "Já há uma votação aberta"
+        if (suspended(me.id)) return "Seu país está suspenso da ONU"
         if (me.politicalCapital < proposeCost) return "Precisa de ${proposeCost.toInt()} de capital político"
-        if (type == ResolutionType.PEACEKEEPING && sim.warBetween(target, other) == null) return "Esses países não estão em guerra"
-        if (type == ResolutionType.CLIMATE && game.un.climateUntil >= 0) return "Já há um acordo do clima em vigor"
-        me.politicalCapital -= proposeCost
-        open(Resolution(type, target, other, me.id, game.day))
+        if (type.hostile && target == me.id) return "Não dá para propor isso contra você mesmo"
+        when (type) {
+            ResolutionType.PEACEKEEPING -> if (sim.warBetween(target, other) == null) return "Esses países não estão em guerra"
+            ResolutionType.CLIMATE -> if (game.un.climateUntil >= 0) return "Já há um acordo do clima em vigor"
+            ResolutionType.NO_FLY -> if (!sim.atWarAny(target)) return "Só vale para país em guerra"
+            ResolutionType.DISARM -> if (!hasNukes(sim.nation(target))) return "Esse país não tem armas nucleares"
+            ResolutionType.LIFT_SANCTIONS -> if (sanctionedBy(target) == 0) return "Ninguém sanciona esse país"
+            else -> if (target >= 0 && has(type, target)) return "Já está em vigor"
+        }
+        return null
+    }
+
+    /** O jogador propõe uma resolução (custa capital político). */
+    fun propose(type: ResolutionType, target: Int, other: Int = -1): String? {
+        proposeRefusal(type, target, other)?.let { return it }
+        sim.player.politicalCapital -= proposeCost
+        open(Resolution(type, target, other, game.player, game.day))
         return null
     }
 
@@ -213,32 +251,53 @@ class UnitedNations(private val sim: Sim) {
             ResolutionType.CONDEMN -> "condenar o governo de $t"
             ResolutionType.AID -> "ajuda humanitária para $t"
             ResolutionType.CLIMATE -> "acordo do clima (3 anos)"
+            ResolutionType.LIFT_SANCTIONS -> "suspender as sanções contra $t"
+            ResolutionType.ARMS_EMBARGO -> "embargo de armas contra $t"
+            ResolutionType.NO_FLY -> "zona de exclusão aérea sobre $t"
+            ResolutionType.DISARM -> "desarmamento nuclear de $t"
+            ResolutionType.RECONSTRUCTION -> "fundo de reconstrução para $t"
+            ResolutionType.SUSPEND -> "suspender $t da ONU"
+            ResolutionType.TRIBUNAL -> "levar o governo de $t ao tribunal internacional"
         }
     }
 
-    fun explain(r: Resolution): String = when (r.type) {
-        ResolutionType.SANCTIONS -> "Quem votar sim aplica sanções. Membros permanentes podem vetar."
+    fun explain(r: Resolution): String = explain(r.type)
+
+    fun explain(t: ResolutionType): String = when (t) {
+        ResolutionType.SANCTIONS -> "Quem votar sim aplica sanções por 2 anos. Membros permanentes podem vetar."
         ResolutionType.PEACEKEEPING -> "Se aprovada, a guerra acaba em paz branca. Membros permanentes podem vetar."
         ResolutionType.CONDEMN -> "O mundo piora a relação com eles e o governo perde estabilidade."
         ResolutionType.AID -> "Quem votar sim paga uma pequena parte do PIB e ganha a simpatia deles."
         ResolutionType.CLIMATE -> "Quem votar sim melhora o meio ambiente, mas cresce um pouco menos por 3 anos."
+        ResolutionType.LIFT_SANCTIONS -> "Todas as sanções contra o país acabam. Membros permanentes podem vetar."
+        ResolutionType.ARMS_EMBARGO -> "Por 2 anos ninguém vende armas a eles e suas tropas custam 30% mais."
+        ResolutionType.NO_FLY -> "Por 1 ano a aviação deles não pode atacar e perde parte dos aviões."
+        ResolutionType.DISARM -> "Os mísseis nucleares deles são desmontados e ficam proibidos por 5 anos."
+        ResolutionType.RECONSTRUCTION -> "Quem votar sim doa; o país ganha infraestrutura e cresce mais por 2 anos."
+        ResolutionType.SUSPEND -> "Por 3 anos o país não vota nem propõe na ONU, e o mundo se afasta."
+        ResolutionType.TRIBUNAL -> "O governo é julgado: estabilidade, aprovação e capital político despencam."
     }
+
+    private fun vetoable(t: ResolutionType) = t.hostile || t == ResolutionType.PEACEKEEPING || t == ResolutionType.LIFT_SANCTIONS
 
     /** Voto de um país do computador: 1 sim, -1 não, 0 abstenção. */
     fun vote(n: Nation, r: Resolution): Int {
         val id = n.id
+        if (suspended(id)) return 0
         val relP = if (r.proposer != id) game.rel(id, r.proposer) else 100f
         var lean = relP / 100f * 0.6f
-        when (r.type) {
-            ResolutionType.SANCTIONS, ResolutionType.CONDEMN -> {
+        when {
+            r.type.hostile -> {
                 if (id == r.target) return -1
                 val rt = game.rel(id, r.target)
                 if (sim.allied(id, r.target)) return -1
                 if (sim.atWar(id, r.target)) return 1
                 lean += -rt / 50f
                 if (n.regime.democratic && !sim.nation(r.target).regime.democratic) lean += 0.4f
+                if (r.type == ResolutionType.DISARM && hasNukes(n)) lean -= 0.5f
+                if (r.type == ResolutionType.NO_FLY || r.type == ResolutionType.ARMS_EMBARGO) lean += if (n.personality == Personality.PACIFIC) 0.3f else 0f
             }
-            ResolutionType.PEACEKEEPING -> {
+            r.type == ResolutionType.PEACEKEEPING -> {
                 val w = sim.warBetween(r.target, r.other) ?: return 0
                 if (w.involves(id)) return if (sim.diplomacy.warScore(w, id) > 10f) -1 else 1
                 for (side in listOf(r.target, r.other)) if (sim.allied(id, side)) {
@@ -246,11 +305,20 @@ class UnitedNations(private val sim: Sim) {
                 }
                 lean += when (n.personality) { Personality.PACIFIC -> 0.8f; Personality.TRADER -> 0.5f; Personality.OPPORTUNIST -> 0f; Personality.EXPANSIONIST -> -0.4f }
             }
-            ResolutionType.AID -> {
+            r.type == ResolutionType.AID || r.type == ResolutionType.RECONSTRUCTION -> {
                 if (id == r.target) return 1
+                if (sim.atWar(id, r.target)) return -1
                 lean += 0.3f + game.rel(id, r.target) / 100f + (n.income - 3) * 0.1f
             }
-            ResolutionType.CLIMATE -> {
+            r.type == ResolutionType.LIFT_SANCTIONS -> {
+                if (id == r.target) return 1
+                if (sim.atWar(id, r.target)) return -1
+                lean += game.rel(id, r.target) / 60f - 0.1f
+                if (game.treaties.any { it.type == TreatyType.SANCTION && it.a == id && it.b == r.target }) lean -= 0.3f
+                if (sim.atWarAny(r.target)) lean -= 0.5f
+                if (n.personality == Personality.TRADER) lean += 0.3f
+            }
+            r.type == ResolutionType.CLIMATE -> {
                 val oil = sim.dev.balance(id, Resource.OIL)
                 lean += (n.income - 3) * 0.2f + (if (n.personality == Personality.PACIFIC) 0.4f else 0f) - (if (oil > 20f) 0.8f else 0f)
             }
@@ -265,22 +333,21 @@ class UnitedNations(private val sim: Sim) {
         game.un.pending = null
         var yes = 0; var no = 0; var abst = 0; var veto = -1
         val yesVoters = ArrayList<Int>()
+        val pv = if (suspended(game.player)) 0 else playerVote
         for (n in game.nations) {
             if (!n.alive) continue
-            val v = if (n.id == game.player) playerVote else vote(n, r)
+            val v = if (n.id == game.player) pv else vote(n, r)
             when (v) { 1 -> { yes++; yesVoters += n.id }; -1 -> no++; else -> abst++ }
-            val vetoable = r.type == ResolutionType.SANCTIONS || r.type == ResolutionType.CONDEMN || r.type == ResolutionType.PEACEKEEPING
-            if (v == -1 && vetoable && veto < 0 && isPermanent(n.id)) veto = n.id
+            if (v == -1 && vetoable(r.type) && veto < 0 && isPermanent(n.id)) veto = n.id
             // quem vota contra o amigo esfria a relação
             if (n.id == game.player && r.target >= 0 && r.target != n.id) {
-                val hostile = r.type == ResolutionType.SANCTIONS || r.type == ResolutionType.CONDEMN
-                if (hostile && v == 1) game.addRel(n.id, r.target, -10f)
-                if (r.type == ResolutionType.AID && v == 1) game.addRel(n.id, r.target, 6f)
+                if (r.type.hostile && v == 1) game.addRel(n.id, r.target, -10f)
+                if ((r.type == ResolutionType.AID || r.type == ResolutionType.RECONSTRUCTION || r.type == ResolutionType.LIFT_SANCTIONS) && v == 1) game.addRel(n.id, r.target, 6f)
             }
         }
         val passed = veto < 0 && yes > no
         if (passed) apply(r, yesVoters)
-        val rec = ResolutionRecord(r.type, r.target, r.other, r.proposer, game.day, yes, no, abst, veto, passed, playerVote)
+        val rec = ResolutionRecord(r.type, r.target, r.other, r.proposer, game.day, yes, no, abst, veto, passed, pv)
         game.un.history.add(0, rec)
         while (game.un.history.size > 20) game.un.history.removeAt(game.un.history.lastIndex)
         if (r.proposer == game.player) {
@@ -292,16 +359,22 @@ class UnitedNations(private val sim: Sim) {
             passed -> "aprovada ($yes a $no)"
             else -> "rejeitada ($yes a $no)"
         }
-        sim.feed(if (passed) "bloc" else "block", text, if (involves) (if (passed == (r.target != game.player)) 1 else 3) else 0)
+        val goodForMe = if (r.target == game.player) !r.type.hostile else true
+        sim.feed(if (passed) "bloc" else "block", text, if (involves) (if (passed == goodForMe) 1 else 3) else 0)
         sim.touch()
         return rec
     }
 
-    private fun apply(r: Resolution, yes: List<Int>) {
+    private fun effect(t: ResolutionType, target: Int, days: Int) {
+        game.un.effects.removeAll { it.type == t && it.target == target }
+        game.un.effects += UnEffect(t, target, game.day + days)
+    }
+
+    internal fun apply(r: Resolution, yes: List<Int>) {
         when (r.type) {
             ResolutionType.SANCTIONS -> {
                 for (v in yes) if (v != r.target && game.treaties.none { it.type == TreatyType.SANCTION && it.a == v && it.b == r.target })
-                    game.treaties += Treaty(TreatyType.SANCTION, v, r.target, game.day)
+                    game.treaties += Treaty(TreatyType.SANCTION, v, r.target, game.day, game.day + 365 * 2)
                 game.treatyCache = null
                 sim.nation(r.target).stability -= 5f
             }
@@ -331,6 +404,49 @@ class UnitedNations(private val sim: Sim) {
                 game.un.climateMembers.clear(); game.un.climateMembers += yes
                 for (v in yes) sim.nation(v).index[Area.ENVIRONMENT.ordinal] = min(100f, sim.nation(v).index[Area.ENVIRONMENT.ordinal] + 5f)
             }
+            ResolutionType.LIFT_SANCTIONS -> {
+                val removed = game.treaties.count { (it.type == TreatyType.SANCTION || it.type == TreatyType.EMBARGO) && it.b == r.target }
+                game.treaties.removeAll { (it.type == TreatyType.SANCTION || it.type == TreatyType.EMBARGO) && it.b == r.target }
+                game.treatyCache = null
+                sim.nation(r.target).stability += 3f
+                if (r.target == game.player && removed > 0) sim.feed("handshake", "$removed sanções contra você foram retiradas", 1)
+            }
+            ResolutionType.ARMS_EMBARGO -> effect(r.type, r.target, 365 * 2)
+            ResolutionType.NO_FLY -> {
+                effect(r.type, r.target, 365)
+                for (a in game.armies) if (a.owner == r.target && a.domain == Domain.AIR)
+                    for (t in UnitType.of(Domain.AIR)) a.units[t.ordinal] *= 0.7f
+            }
+            ResolutionType.DISARM -> {
+                val t = sim.nation(r.target)
+                t.nukes = 0; t.nukeBuild = 0
+                effect(r.type, r.target, 365 * 5)
+                t.stability -= 3f
+            }
+            ResolutionType.RECONSTRUCTION -> {
+                val t = sim.nation(r.target)
+                for (v in yes) if (v != t.id) {
+                    val amount = game.natGdp(v) * 0.0008
+                    val donor = sim.nation(v)
+                    donor.treasury -= amount
+                    if (donor.treasury < 0) { donor.debt -= donor.treasury; donor.treasury = 0.0 }
+                    t.treasury += amount
+                    game.addRel(v, t.id, 4f)
+                }
+                t.index[Area.INFRA.ordinal] = min(100f, t.index[Area.INFRA.ordinal] + 6f)
+                effect(r.type, r.target, 365 * 2)
+            }
+            ResolutionType.SUSPEND -> {
+                effect(r.type, r.target, 365 * 3)
+                for (o in game.nations) if (o.alive && o.id != r.target) game.addRel(o.id, r.target, -5f)
+                sim.nation(r.target).stability -= 3f
+            }
+            ResolutionType.TRIBUNAL -> {
+                val t = sim.nation(r.target)
+                t.stability -= 8f; t.approval -= 6f; t.politicalCapital = 0f
+                for (g in Group.entries) t.groupMods[g.ordinal] -= 4f
+                for (o in game.nations) if (o.alive && o.id != t.id) game.addRel(o.id, t.id, -4f)
+            }
         }
     }
 
@@ -346,7 +462,7 @@ class UnitedNations(private val sim: Sim) {
     }
 
     fun vetoThreat(r: Resolution): Int? {
-        if (r.type != ResolutionType.SANCTIONS && r.type != ResolutionType.CONDEMN && r.type != ResolutionType.PEACEKEEPING) return null
+        if (!vetoable(r.type)) return null
         val saved = game.rngState
         val v = game.nations.firstOrNull { it.alive && it.id != game.player && isPermanent(it.id) && vote(it, r) == -1 }?.id
         game.rngState = saved

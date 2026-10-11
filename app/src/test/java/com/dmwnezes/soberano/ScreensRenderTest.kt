@@ -6,6 +6,9 @@ import androidx.compose.ui.test.captureToImage
 import androidx.activity.ComponentActivity
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.test.onRoot
+import androidx.compose.ui.test.onNodeWithText
+import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performTextInput
 import com.dmwnezes.soberano.data.SaveStore
 import com.dmwnezes.soberano.sim.Domain
 import com.dmwnezes.soberano.sim.PendingEvent
@@ -90,7 +93,7 @@ class ScreensRenderTest {
         rule.runOnIdle { c.lawInfo = null; c.refresh() }
         rule.runOnIdle { repeat(70) { sim.advanceDay() }; sim.game.events.clear(); sim.game.proposals.clear() }
         for ((i, t) in Tab.entries.withIndex()) {
-            val subs = if (t == Tab.DIPLOMACY) 1 else 4
+            val subs = when (t) { Tab.DIPLOMACY -> 1; Tab.ECONOMY, Tab.MILITARY -> 5; else -> 4 }
             for (k in 0 until subs) {
                 rule.runOnIdle { c.selArmy = -1; c.selProvince = -1; c.tab = t; c.subTab[t] = k; c.refresh() }
                 shot("1${i}${k}_${t.name.lowercase()}")
@@ -179,6 +182,46 @@ class ScreensRenderTest {
         }
         shot("50_eleicao")
         org.junit.Assert.assertEquals(1, rule.onAllNodes(androidx.compose.ui.test.hasText("Reeleito!")).fetchSemanticsNodes().size)
+    }
+
+    @Test fun newFeatures3() {
+        val sim = TestWorld.newSim("BRA", seed = 63)
+        val c = controller(sim)
+        val g = sim.game
+        val me = sim.player
+        rule.mainClock.autoAdvance = false
+        rule.setContent { SoberanoTheme { GameScreen(c, {}, {}, {}, SaveStore(Files.createTempDirectory("n3").toFile())) } }
+        rule.runOnIdle {
+            repeat(35) { sim.advanceDay() }
+            g.events.clear(); g.proposals.clear(); g.un.pending = null
+            for (a in sim.armiesOf(me.id)) if (a.moving) sim.military.stop(a)
+            c.dialog = "spread"; c.refresh()
+        }
+        shot("60_dividir")
+        rule.runOnIdle { c.dialog = null; g.troopFilter = 2; c.refresh() }
+        shot("61_tropas_ocultas")
+        rule.runOnIdle {
+            g.troopFilter = 0
+            val usa = g.nations.first { it.code == "USA" }
+            g.treaties += com.dmwnezes.soberano.sim.Treaty(com.dmwnezes.soberano.sim.TreatyType.SANCTION, usa.id, me.id, g.day, g.day + 700)
+            sim.unitedNations.apply(com.dmwnezes.soberano.sim.Resolution(com.dmwnezes.soberano.sim.ResolutionType.ARMS_EMBARGO, g.nations.first { it.code == "RUS" }.id, -1, usa.id, g.day), emptyList())
+            c.tab = Tab.WORLD; c.subTab[Tab.WORLD] = 2; c.refresh()
+        }
+        shot("62_onu_em_vigor")
+        rule.runOnIdle { c.tab = Tab.ECONOMY; c.subTab[Tab.ECONOMY] = 0; c.refresh() }
+        shot("63_economia_sancao")
+        rule.runOnIdle { c.tab = null; c.lawEditor = true; c.refresh() }
+        shot("64_lei_ia")
+        rule.onNode(androidx.compose.ui.test.hasSetTextAction()).performTextInput("Semana de trabalho de 4 dias e transporte público gratuito")
+        rule.onNodeWithText("Analisar a lei").performClick()
+        var tries = 0
+        while (rule.onAllNodes(androidx.compose.ui.test.hasText("O que muda")).fetchSemanticsNodes().isEmpty() && tries++ < 150) {
+            rule.mainClock.advanceTimeBy(100); Thread.sleep(40)
+            org.robolectric.shadows.ShadowLooper.idleMainLooper()
+        }
+        shot("65_lei_ia_resultado")
+        rule.onNodeWithText("Salvar rascunho").performClick()
+        rule.runOnIdle { org.junit.Assert.assertTrue(g.customLaws.any { it.free != null }) }
     }
 
     @Test fun civilWarOnMap() {

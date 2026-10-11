@@ -82,6 +82,8 @@ class GameController(val sim: Sim, private val store: SaveStore, private val sco
     var paperSeenDay by mutableIntStateOf(-1)
     var showPaper by mutableStateOf(false)
     var showSearch by mutableStateOf(false)
+    /** diálogo em tela cheia aberto a partir de uma gaveta ("spread", "gather", "lawai") */
+    var dialog by mutableStateOf<String?>(null)
 
     fun refresh() { tick++ }
 

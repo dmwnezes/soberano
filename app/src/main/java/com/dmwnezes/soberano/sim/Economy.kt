@@ -35,15 +35,34 @@ class Economy(private val sim: Sim) {
         val revenue = gdp * n.tax / 12.0 * (1.0 - n.corruption / 100.0 * 0.15) * (1.0 + lawSum(n) { it.revenue }) * diff
         var civil = 0.0
         for (a in Area.entries) if (a != Area.DEFENSE) civil += gdp * n.shares[a.ordinal] / 12.0
+        civil *= sim.policy.civilMult(n)
         val defense = gdp * n.shares[Area.DEFENSE.ordinal] / 12.0
         val ratio = if (gdp > 0) min(n.debt / gdp, 2.5) else 0.0
-        val interest = n.debt * (0.008 + 0.012 * ratio) / 12.0
+        val interest = n.debt * (0.008 + 0.012 * ratio) / 12.0 * sim.policy.interestMult(n)
         return Budget(gdp, revenue, civil, defense, interest, upkeep(n.id))
     }
 
     fun tradeCount(id: Int) = game.treaties.count { it.type == TreatyType.TRADE && (it.a == id || it.b == id) }
-    fun sanctionsOn(id: Int) = game.treaties.count { (it.type == TreatyType.SANCTION || it.type == TreatyType.EMBARGO) && it.b == id } +
-        game.treaties.count { it.type == TreatyType.EMBARGO && it.b == id }
+    fun sanctionsOn(id: Int) = game.treaties.count { (it.type == TreatyType.SANCTION || it.type == TreatyType.EMBARGO) && it.b == id }
+
+    /**
+     * Quanto as sanções tiram do crescimento anual. Depende do peso econômico de quem sanciona
+     * (sanção de micro-países quase não pesa), tem teto e diminui com o tempo, porque a economia se adapta.
+     */
+    fun sanctionPenalty(id: Int): Float {
+        var world = 0.0
+        for (n in game.nations) if (n.alive && n.id != id) world += game.natGdp(n.id)
+        if (world <= 0.0) return 0f
+        var w = 0.0
+        for (t in game.treaties) {
+            if (t.b != id || (t.type != TreatyType.SANCTION && t.type != TreatyType.EMBARGO)) continue
+            val years = (game.day - t.start) / 365f
+            val adapt = (1f - years * 0.25f).coerceIn(0.4f, 1f)
+            val k = if (t.type == TreatyType.EMBARGO) 1.6 else 1.0
+            w += game.natGdp(t.a) / world * k * adapt
+        }
+        return (0.05 * min(1.0, w)).toFloat().coerceAtMost(0.04f)
+    }
 
     fun occupiedFraction(id: Int): Float {
         val own = game.natProvinces(id)
@@ -59,13 +78,15 @@ class Economy(private val sim: Sim) {
         g += 0.010f * (n.stability - 60f) / 50f
         g -= 0.4f * max(0f, n.tax - 0.33f)
         g += 0.0007f * min(8, tradeCount(n.id))
-        g -= 0.01f * sanctionsOn(n.id)
+        g -= sanctionPenalty(n.id)
         if (sim.atWarAny(n.id)) g -= 0.01f
         g -= occupiedFraction(n.id) * 0.2f
         if (game.settings.economy != EconomyDepth.SIMPLE) g -= min(0.03f, max(0f, n.inflation - 6f) * 0.002f)
         g += lawSum(n) { it.growth }
+        g += sim.policy.growthEffect(n)
         g += sim.dev.tradeGrowth(n) + sim.dev.builtGrowth(n)
         if (sim.unitedNations.inClimateDeal(n.id)) g -= 0.002f
+        if (sim.unitedNations.has(ResolutionType.RECONSTRUCTION, n.id)) g += 0.01f
         if (n.id == game.player) g += sim.dev.economyBonus()
         g += (n.tech[TechBranch.ECONOMY.ordinal] - 3) * 0.001f
         if (n.id == game.player) g += (game.settings.difficulty.economy - 1f) * 0.02f
@@ -130,7 +151,7 @@ class Economy(private val sim: Sim) {
         // inflação e desemprego
         val deficit = max(0.0, -balance * 12.0) / b.gdp
         val inflTarget = if (game.settings.economy == EconomyDepth.SIMPLE) 3f
-        else (3f + 25f * deficit.toFloat() + lawSum(n) { it.inflation }).coerceIn(0f, 80f)
+        else (3f + 25f * deficit.toFloat() + lawSum(n) { it.inflation } + sim.policy.inflationEffect(n)).coerceIn(0f, 80f)
         n.inflation += (inflTarget - n.inflation) * 0.2f
         val uTarget = 7f - (g * 100f - 2f) * 1.2f + (if (sim.atWarAny(n.id)) 1.5f else 0f)
         n.unemployment += (uTarget.coerceIn(1.5f, 40f) - n.unemployment) * 0.2f

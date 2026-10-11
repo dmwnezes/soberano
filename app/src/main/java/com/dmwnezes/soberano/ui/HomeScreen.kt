@@ -1,5 +1,9 @@
 package com.dmwnezes.soberano.ui
 
+import androidx.compose.foundation.rememberScrollState
+
+import androidx.compose.foundation.verticalScroll
+
 import android.content.Intent
 import android.net.Uri
 import androidx.compose.foundation.background
@@ -146,7 +150,7 @@ fun Overlay(onDismiss: () -> Unit, dismissable: Boolean = true, content: @Compos
         contentAlignment = Alignment.Center,
     ) {
         Column(
-            Modifier.padding(22.dp).fillMaxWidth().clip(Shapes.card).background(Ink.panelSolid)
+            Modifier.statusBarsPadding().navigationBarsPadding().padding(22.dp).fillMaxWidth().clip(Shapes.card).background(Ink.panelSolid)
                 .clickable(interactionSource = remember { androidx.compose.foundation.interaction.MutableInteractionSource() }, indication = null) {}
                 .padding(20.dp),
         ) { content() }

@@ -50,12 +50,13 @@ fun MilitarySheet(c: GameController, onNuke: () -> Unit) {
     val b = c.sim.economy.budget(me)
     Column(Modifier.fillMaxSize()) {
         SheetHeaderTabs("Forças armadas", "Fundo ${Fmt.money(me.militaryFund)}, manutenção ${Fmt.money(b.upkeep)}/mês",
-            listOf("Tropas", "Recrutar", "Automático", "Tecnologia"), tab) { c.subTab[Tab.MILITARY] = it }
+            listOf("Tropas", "Recrutar", "Comando", "Automático", "Tecnologia"), tab) { c.subTab[Tab.MILITARY] = it }
         Box(Modifier.weight(1f)) {
             when (tab) {
                 0 -> MilTroops(c)
                 1 -> MilRecruit(c)
-                2 -> MilAuto(c)
+                2 -> MilCommand(c)
+                3 -> MilAuto(c)
                 else -> MilTech(c, onNuke)
             }
         }
@@ -69,8 +70,6 @@ private fun MilTroops(c: GameController) {
     val g = c.game
     val sim = c.sim
     val armies = sim.armiesOf(me.id)
-    var gather by remember { mutableStateOf(false) }
-    var spread by remember { mutableStateOf(false) }
     Box(Modifier.fillMaxSize()) {
         SheetBody {
             Spacer(Modifier.height(8.dp))
@@ -84,7 +83,7 @@ private fun MilTroops(c: GameController) {
             }
             Spacer(Modifier.height(10.dp))
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                Btn("Reunir tropas", Modifier.weight(1f), BtnKind.PRIMARY, Icons.Rounded.CallMerge) { gather = true }
+                Btn("Reunir tropas", Modifier.weight(1f), BtnKind.PRIMARY, Icons.Rounded.CallMerge) { c.dialog = "gather" }
                 Btn("Juntar paradas", Modifier.weight(1f), icon = Icons.Rounded.MergeType) {
                     var n = 0
                     for (a in sim.armiesOf(me.id).toList()) if (g.armies.contains(a) && !a.moving && !a.battle) {
@@ -94,7 +93,7 @@ private fun MilTroops(c: GameController) {
                 }
             }
             Spacer(Modifier.height(8.dp))
-            Btn("Dividir igualmente pelas províncias", Modifier.fillMaxWidth(), BtnKind.GHOST, Icons.Rounded.GridView) { spread = true }
+            Btn("Dividir igualmente pelas províncias", Modifier.fillMaxWidth(), BtnKind.GHOST, Icons.Rounded.GridView) { c.dialog = "spread" }
             ToggleRow("Juntar automaticamente", g.autoMerge, Icons.Rounded.AutoMode, "Exércitos parados no mesmo lugar viram um só") { g.autoMerge = it; c.refresh() }
 
             SectionTitle("Exércitos, frotas e alas")
@@ -122,14 +121,12 @@ private fun MilTroops(c: GameController) {
                 }
             }
         }
-        if (gather) GatherDialog(c) { gather = false }
-        if (spread) SpreadDialog(c) { spread = false }
     }
 }
 
 /** Divide as divisões paradas igualmente entre as províncias (todas ou só a fronteira). */
 @Composable
-private fun SpreadDialog(c: GameController, onClose: () -> Unit) {
+fun SpreadDialog(c: GameController, onClose: () -> Unit) {
     @Suppress("UNUSED_EXPRESSION") c.tick // relê quando o jogo avança (evita pular a recomposição)
     val g = c.game
     val sim = c.sim
@@ -157,6 +154,8 @@ private fun SpreadDialog(c: GameController, onClose: () -> Unit) {
                 Cell("Em cada", if (extra > 0) "$each a ${each + 1}" else "$each", Ink.brass)
             }
         }
+        if (divs == 0) Text(if (idle.isEmpty() && sim.armiesOf(me).any { it.domain == Domain.LAND }) "Todas as tropas estão marchando ou em combate. Pare alguma para dividir."
+            else "Nenhuma tropa terrestre parada.", style = Type.small, color = Ink.amber, modifier = Modifier.padding(top = 8.dp))
         if (divs < targets.size && divs > 0) Text("Há menos divisões que províncias: ${targets.size - divs} ficam sem tropa (as menos importantes).",
             style = Type.small, color = Ink.amber, modifier = Modifier.padding(top = 8.dp))
         if (targets.isNotEmpty() && targets.size < sim.provincesOf(me).size && !borderOnly)
@@ -175,7 +174,7 @@ private fun SpreadDialog(c: GameController, onClose: () -> Unit) {
 
 /** Escolhe onde reunir todas as tropas terrestres paradas. */
 @Composable
-private fun GatherDialog(c: GameController, onClose: () -> Unit) {
+fun GatherDialog(c: GameController, onClose: () -> Unit) {
     @Suppress("UNUSED_EXPRESSION") c.tick // relê quando o jogo avança (evita pular a recomposição)
     val g = c.game
     val sim = c.sim
@@ -313,14 +312,15 @@ private fun MilAuto(c: GameController) {
                 Row {
                     Cell("Por mês", "+${Fmt.one(rate)} div.", Ink.good)
                     Cell("Exército", "${have.toInt()} / ${cap.toInt()}", if (have >= cap) Ink.amber else Ink.text)
-                    Cell("Próxima", "${((1f - me.reserves.coerceIn(0f, 1f)) * 100).toInt()}%")
+                    Cell("Em treino", "${Fmt.one(sim.dev.reservesInTraining(me.id) + me.reserves)} div.")
                 }
                 Spacer(Modifier.height(8.dp))
                 Meter(have / cap * 100, Modifier.fillMaxWidth(), if (have >= cap) Ink.amber else Ink.verdigris)
                 Spacer(Modifier.height(10.dp))
                 val rp = g.rallyPoint.takeIf { it >= 0 && g.controller[it] == me.id }
-                Text("Chegam em: ${sim.world.provinces[rp ?: me.capital].name}" + if (rp == null) " (capital)" else " (ponto de reunião)", style = Type.label, color = Ink.text)
-                Text("Para mudar, toque numa província sua e escolha \"Ponto de reunião\".", style = Type.small, color = Ink.faint)
+                Text(if (rp == null) "Treinam em todos os seus estados ao mesmo tempo" else "Chegam em: ${sim.world.provinces[rp].name} (ponto de reunião)", style = Type.label, color = Ink.text)
+                if (rp != null) Btn("Voltar a treinar em todos os estados", Modifier.fillMaxWidth().padding(top = 6.dp), BtnKind.GHOST) { c.game.rallyPoint = -1; c.refresh() }
+                else Text("Estados com tropa parada recebem reforço todo mês; os outros formam uma divisão nova quando completam o treino.", style = Type.small, color = Ink.faint)
             }
         }
         Text("Defesa alta no orçamento, serviço militar obrigatório e guerra aceleram o treinamento.", style = Type.small, color = Ink.faint, modifier = Modifier.padding(top = 8.dp))
@@ -533,5 +533,49 @@ private fun RankRow(c: GameController, pos: Int, n: Nation, kind: Int) {
                 else -> "${n.approval.toInt()}%"
             }, style = Type.label, color = Ink.muted,
         )
+    }
+}
+
+/** Mobilização, exercícios, mercenários e bombardeio estratégico. */
+@Composable
+private fun MilCommand(c: GameController) {
+    @Suppress("UNUSED_EXPRESSION") c.tick // relê quando o jogo avança (evita pular a recomposição)
+    val me = c.me
+    val g = c.game
+    val sim = c.sim
+    val pol = sim.policy
+    var bombing by remember { mutableStateOf(false) }
+    SheetBody {
+        Spacer(Modifier.height(8.dp))
+        ToggleRow("Mobilização geral", me.mobilized, GameIcons.of("mobilize"),
+            if (me.mobilized) "Reservistas 2,5× mais rápidos, exército até 50% maior; PIB cresce 1,5% menos"
+            else "Custa ⚡${pol.mobilizeCost.toInt()}. Reservistas 2,5× e exército maior; a economia sofre") {
+            c.act(if (it) "Mobilização geral decretada" else "Mobilização encerrada") { pol.toggleMobilization(me) }
+        }
+        val drill = pol.drillOn(me)
+        ActionRow(GameIcons.of("drill"), if (drill) "Tropas treinadas" else "Exercícios militares",
+            if (drill) "+10% em combate até ${dateText(me.drillUntil)}" else "Custa ${Fmt.money(pol.drillCost(me))}: moral +20% e +10% em combate por 6 meses",
+            !drill, active = drill) { c.act("Exercícios concluídos") { pol.drill(me) } }
+        val mercWhy = pol.mercsRefusal(me)
+        ActionRow(GameIcons.of("mercs"), "Contratar mercenários",
+            mercWhy ?: "${pol.mercsCount} divisões na hora, na capital, por ${Fmt.money(pol.mercsCost(me))}", mercWhy == null) {
+            c.act { pol.hireMercs(me, me.capital.takeIf { g.controller[it] == me.id } ?: sim.provincesOf(me.id).first { g.controller[it] == me.id }) }
+        }
+        val enemies = g.nations.filter { it.alive && sim.atWar(me.id, it.id) }
+        ActionRow(GameIcons.of("bomb"), "Bombardeio estratégico",
+            if (enemies.isEmpty()) "Só em guerra" else if (g.day - me.lastBombing < 30) "Aviões voltando (${30 - (g.day - me.lastBombing)} dias)"
+            else "A aviação ataca a economia do inimigo", enemies.isNotEmpty() && g.day - me.lastBombing >= 30, danger = true) { bombing = true }
+        Text("Para desmobilizar, toque num exército no mapa e escolha \"Desmobilizar\".", style = Type.small, color = Ink.faint, modifier = Modifier.padding(top = 8.dp))
+    }
+    if (bombing) Overlay({ bombing = false }) {
+        Text("Bombardear quem?", style = Type.heading, color = Ink.text)
+        Text("Até 6 províncias ao alcance perdem 3% do PIB; parte dos aviões cai.", style = Type.small, color = Ink.muted)
+        Spacer(Modifier.height(8.dp))
+        for (n in g.nations.filter { it.alive && sim.atWar(me.id, it.id) }) {
+            val why = pol.bombingRefusal(me, n.id)
+            ActionRow(GameIcons.of("bomb"), n.name, why ?: "${pol.bombingTargets(me, n.id).size} alvos ao alcance", why == null, danger = true) {
+                c.act { pol.bomb(me, n.id) }; bombing = false
+            }
+        }
     }
 }

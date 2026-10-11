@@ -245,12 +245,13 @@ fun EconomySheet(c: GameController) {
     val tab = c.subTab[Tab.ECONOMY] ?: 0
     Column(Modifier.fillMaxSize()) {
         SheetHeaderTabs("Economia", "PIB ${Fmt.money(c.game.natGdp(me.id))}, crescimento ${Fmt.one(me.growth * 100)}% ao ano",
-            listOf("Orçamento", "Recursos", "Obras", "Histórico"), tab) { c.subTab[Tab.ECONOMY] = it }
+            listOf("Orçamento", "Banco central", "Recursos", "Obras", "Histórico"), tab) { c.subTab[Tab.ECONOMY] = it }
         Box(Modifier.weight(1f)) {
             when (tab) {
                 0 -> EconBudget(c)
-                1 -> EconResources(c)
-                2 -> EconProjects(c)
+                1 -> EconPolicy(c)
+                2 -> EconResources(c)
+                3 -> EconProjects(c)
                 else -> EconHistory(c)
             }
         }
@@ -291,6 +292,8 @@ private fun EconBudget(c: GameController) {
                 val trade = c.sim.dev.tradeBalance(me.id)
                 Row {
                     Cell("Comércio de recursos", (if (trade >= 0) "+" else "") + Fmt.money(trade.toDouble()) + "/ano", if (trade >= 0) Ink.good else Ink.coral)
+                    val sanc = c.sim.economy.sanctionsOn(me.id)
+                    if (sanc > 0) Cell("Sanções ($sanc)", "−${Fmt.one(c.sim.economy.sanctionPenalty(me.id) * 100)}% cresc.", Ink.coral)
                 }
             }
         }
@@ -444,5 +447,54 @@ private fun EconHistory(c: GameController) {
         LineChart("Estabilidade", h.map { it.stability }, "${me.stability.toInt()}", Ink.verdigris)
         Spacer(Modifier.height(10.dp))
         LineChart("Força terrestre", h.map { it.power }, "${c.sim.landPower(me.id).toInt()}", Ink.amber)
+    }
+}
+
+/** Banco central, fundo soberano, estímulo e austeridade. */
+@Composable
+private fun EconPolicy(c: GameController) {
+    @Suppress("UNUSED_EXPRESSION") c.tick // relê quando o jogo avança (evita pular a recomposição)
+    val me = c.me
+    val g = c.game
+    val pol = c.sim.policy
+    SheetBody {
+        Spacer(Modifier.height(8.dp))
+        Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+            BigStat("Inflação", "${Fmt.one(me.inflation)}%", Ink.scale(100 - me.inflation * 6), Modifier.weight(1f))
+            BigStat("Crescimento", "${Fmt.one(me.growth * 100)}%", if (me.growth >= 0) Ink.good else Ink.coral, Modifier.weight(1f))
+        }
+        SectionTitle("Juros básicos")
+        var rate by remember(me.id) { mutableStateOf(me.policyRate) }
+        val d = rate - 6f
+        SliderRow(GameIcons.of("bank"), "Taxa do banco central", rate, 2f..20f, "${Fmt.one(rate)}%",
+            hint = if (kotlin.math.abs(d) < 0.3f) "neutro" else if (d > 0) "inflação ↓ crescimento ↓" else "crescimento ↑ inflação ↑",
+            hintGood = d <= 0) { rate = (it * 2).toInt() / 2f; pol.setPolicyRate(me, rate); c.refresh() }
+        Text("Juros altos seguram a inflação e encarecem a dívida; juros baixos aceleram a economia.", style = Type.small, color = Ink.faint)
+
+        SectionTitle("Medidas")
+        ActionRow(GameIcons.of("print"), "Imprimir dinheiro", "+${Fmt.money(pol.printAmount(me))} agora, inflação sobe" +
+            if (me.printed > 0.5f) " (já pressionada)" else "", me.printed < 8f, danger = me.printed > 3f) {
+            c.act("Dinheiro impresso") { pol.printMoney(me) }
+        }
+        val stim = pol.stimulusOn(me)
+        ActionRow(GameIcons.of("boost"), if (stim) "Estímulo em andamento" else "Pacote de estímulo",
+            if (stim) "Até ${dateText(me.stimulusUntil)}: +1,2% de crescimento" else "Custa ${Fmt.money(pol.stimulusCost(me))}: +1,2% de crescimento por 1 ano",
+            !stim, active = stim) { c.act("Pacote de estímulo lançado") { pol.stimulus(me) } }
+        val aus = pol.austerityOn(me)
+        ActionRow(GameIcons.of("cut"), if (aus) "Encerrar austeridade" else "Austeridade",
+            if (aus) "Até ${dateText(me.austerityUntil)}: gastos civis −15%" else "Gastos civis −15% por 1 ano; trabalhadores e aposentados reclamam",
+            true, active = aus) { c.act(if (aus) "Austeridade encerrada" else "Austeridade em vigor") { pol.austerity(me) } }
+
+        SectionTitle("Fundo soberano", trailing = { Text(Fmt.money(me.sovereignFund), style = Type.label, color = Ink.brass) })
+        Text("Rende 5% ao ano. Serve de reserva para crises.", style = Type.small, color = Ink.muted)
+        Spacer(Modifier.height(8.dp))
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            Btn("Guardar ${Fmt.money(pol.fundDepositAmount(me))}", Modifier.weight(1f), BtnKind.PRIMARY, enabled = me.treasury >= pol.fundDepositAmount(me)) {
+                c.act { pol.depositFund(me) }
+            }
+            Btn("Sacar tudo", Modifier.weight(1f), enabled = me.sovereignFund > 0) { c.act("Fundo sacado para o tesouro") { pol.withdrawFund(me) } }
+        }
+        if (g.settings.economy == com.dmwnezes.soberano.sim.EconomyDepth.SIMPLE)
+            Text("Na economia simples a inflação não muda o crescimento.", style = Type.small, color = Ink.faint, modifier = Modifier.padding(top = 8.dp))
     }
 }

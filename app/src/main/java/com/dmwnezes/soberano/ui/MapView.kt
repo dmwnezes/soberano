@@ -318,13 +318,7 @@ class MapRenderer(private val world: WorldMap, typeface: Typeface?) {
     }
 
     /** Quais exércitos aparecem: do jogador, aliados, inimigos e, com zoom, todos. */
-    fun visibleArmies(sim: Sim, cam: MapCamera): List<Army> {
-        val me = sim.game.player
-        val zoomed = cam.scale > 2.2f
-        return sim.game.armies.filter { a ->
-            a.owner == me || sim.atWar(me, a.owner) || (zoomed && (sim.allied(me, a.owner) || cam.scale > 4f)) || a.battle
-        }
-    }
+    fun visibleArmies(sim: Sim, cam: MapCamera): List<Army> = visibleArmiesAt(sim, cam.scale)
 
     fun markerRects(sim: Sim, cam: MapCamera, dp: Float): List<Pair<Army, RectF>> {
         val out = ArrayList<Pair<Army, RectF>>()
@@ -677,3 +671,16 @@ fun fitNation(sim: Sim, camera: MapCamera, nation: Int, around: Int) {
 
 private val lastKey = HashMap<MapRenderer, Long>()
 private val lastColors = HashMap<MapRenderer, Pair<IntArray, IntArray>>()
+
+/** Tropas que aparecem no mapa, conforme o zoom e o filtro escolhido pelo jogador. */
+fun visibleArmiesAt(sim: Sim, scale: Float): List<Army> {
+    val me = sim.game.player
+    val zoomed = scale > 2.2f
+    return when (sim.game.troopFilter) {
+        2 -> sim.game.armies.filter { a -> a.battle && (a.owner == me || sim.atWar(me, a.owner)) }
+        1 -> sim.game.armies.filter { a -> a.owner == me || a.battle && sim.atWar(me, a.owner) }
+        else -> sim.game.armies.filter { a ->
+            a.owner == me || sim.atWar(me, a.owner) || (zoomed && (sim.allied(me, a.owner) || scale > 4f)) || a.battle
+        }
+    }
+}

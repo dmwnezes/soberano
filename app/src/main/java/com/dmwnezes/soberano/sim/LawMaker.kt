@@ -133,6 +133,13 @@ object LawMaker {
     val intensities = listOf(1 to "Branda", 2 to "Moderada", 3 to "Dura")
 
     fun build(cl: CustomLaw): Law {
+        cl.free?.let { fl ->
+            return Law(
+                id = cl.id, name = cl.name, icon = fl.icon, desc = cl.prompt.ifBlank { fl.notes.joinToString(". ") },
+                groups = fl.groups, index = fl.index, growth = fl.growth, revenue = fl.revenue,
+                corruption = fl.corruption, stability = fl.stability, inflation = fl.inflation,
+            )
+        }
         val f = factor(cl.intensity)
         val ms = cl.measures.mapNotNull { byId[it] }
         val groups = HashMap<Group, Float>()
@@ -212,6 +219,15 @@ object LawMaker {
     fun create(game: Game, name: String, measures: List<String>, intensity: Int): CustomLaw {
         val id = "custom_${System.currentTimeMillis().toString(36)}_${game.customLaws.size}"
         val cl = CustomLaw(id, name.trim().ifEmpty { suggestName(measures) }, measures, intensity)
+        game.customLaws += cl
+        Content.customLaws[id] = build(cl)
+        return cl
+    }
+
+    /** Cria uma lei escrita em texto livre, já com os efeitos estimados. */
+    fun createFree(game: Game, name: String, prompt: String, law: FreeLaw): CustomLaw {
+        val id = "custom_${System.currentTimeMillis().toString(36)}_${game.customLaws.size}"
+        val cl = CustomLaw(id, name.trim().ifEmpty { LawInterpreter.nameFrom(prompt) }, emptyList(), 2, prompt.trim().take(600), law.clamped())
         game.customLaws += cl
         Content.customLaws[id] = build(cl)
         return cl
