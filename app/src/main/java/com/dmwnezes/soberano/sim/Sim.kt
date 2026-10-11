@@ -18,6 +18,15 @@ class Sim(val world: WorldMap, val game: Game) {
     val ai = Ai(this)
     val events = Events(this)
 
+    init {
+        LawMaker.register(game)
+        // saves da versão 0.1 usavam outra paleta
+        for (n in game.nations) {
+            val k = Setup.OLD_PALETTE.indexOf(n.mapColor)
+            if (k >= 0) n.mapColor = Setup.PALETTE[k]
+        }
+    }
+
     /** Muda a cada dia simulado ou ação; a interface usa para redesenhar. */
     var revision = 0L
         private set

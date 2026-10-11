@@ -39,9 +39,10 @@ class Military(private val sim: Sim) {
      * Caminho para um exército terrestre de [owner] de [from] até [to] (sem incluir [from]).
      * Com [allowSea], cruza o mar entre províncias costeiras (exige transportes).
      */
-    fun landPath(owner: Int, from: Int, to: Int, allowSea: Boolean): IntArray? {
+    fun landPath(owner: Int, from: Int, to: Int, allowSea: Boolean, alsoEnter: Int = -1): IntArray? {
         if (from == to) return IntArray(0)
-        if (!sim.canEnter(owner, to)) return null
+        val ok = { p: Int -> sim.canEnter(owner, p) || (alsoEnter >= 0 && game.controller[p] == alsoEnter) }
+        if (!ok(to)) return null
         val np = world.provinces.size
         val dist = FloatArray(np) { Float.MAX_VALUE }
         val prev = IntArray(np) { -1 }
@@ -58,14 +59,14 @@ class Military(private val sim: Sim) {
             val p = world.provinces[u]
             for (k in p.neighbors.indices) {
                 val v = p.neighbors[k]
-                if (v != to && !sim.canEnter(owner, v)) continue
+                if (v != to && !ok(v)) continue
                 val nd = d + neighborKm[u][k]
                 if (nd < dist[v]) { dist[v] = nd; prev[v] = u; push(nd, v) }
             }
             if (allowSea && p.coastal) {
                 for (v in coastal) {
                     if (v == u || isLandNeighbor(u, v)) continue
-                    if (v != to && !sim.canEnter(owner, v)) continue
+                    if (v != to && !ok(v)) continue
                     val km = world.distanceKm(u, v)
                     if (km > SEA_RANGE_KM) continue
                     // mar é mais lento que estrada: peso equivalente a 25 km/dia
@@ -138,6 +139,33 @@ class Military(private val sim: Sim) {
         a.progress = 0f
         a.legKm = if (path.isEmpty()) 0f else legKm(a.province, path[0])
     }
+
+    /** Caminho e dias até [target], para mostrar antes de confirmar (null = sem caminho). */
+    fun preview(a: Army, target: Int): Pair<IntArray, Int>? {
+        val path: IntArray = when (a.domain) {
+            Domain.LAND -> {
+                val ctrl = game.controller[target]
+                val extra = if (!sim.canEnter(a.owner, target)) ctrl else -1
+                landPath(a.owner, a.province, target, false, extra) ?: landPath(a.owner, a.province, target, true, extra) ?: return null
+            }
+            Domain.SEA -> if (world.provinces[target].coastal) intArrayOf(target) else return null
+            Domain.AIR -> intArrayOf(target)
+        }
+        var km = 0.0; var prev = a.province
+        for (q in path) {
+            val sea = a.domain == Domain.LAND && !isLandNeighbor(prev, q)
+            km += legKm(prev, q) / (if (sea) SEA_SPEED else armySpeed(a))
+            prev = q
+        }
+        return path to kotlin.math.ceil(km).toInt().coerceAtLeast(1)
+    }
+
+    /** Força terrestre inimiga de [owner] parada em [p]. */
+    fun enemyPowerAt(owner: Int, p: Int): Float = game.armies.filter { it.province == p && it.domain == Domain.LAND && (sim.atWar(owner, it.owner) || it.owner == game.controller[p] && it.owner != owner && !sim.allied(owner, it.owner)) }
+        .sumOf { a -> UnitType.of(Domain.LAND).sumOf { (a.units[it.ordinal] * (it.attack + it.defense) * a.morale).toDouble() } }.toFloat()
+
+    fun landStrength(a: Army): Float = UnitType.of(Domain.LAND).sumOf { (a.units[it.ordinal] * (it.attack + it.defense) * a.morale).toDouble() }.toFloat() *
+        techMult(a.owner, Domain.LAND)
 
     fun stop(a: Army) { a.path = IntArray(0); a.progress = 0f; sim.touch() }
 

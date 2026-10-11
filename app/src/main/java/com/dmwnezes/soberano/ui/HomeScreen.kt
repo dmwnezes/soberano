@@ -13,6 +13,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.navigationBarsPadding
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
@@ -65,7 +66,11 @@ fun HomeScreen(preview: Sim, store: SaveStore, onNew: () -> Unit, onLoad: (Strin
         WorldMapView(preview, camera, null, Modifier.fillMaxSize(), outlineNation = -1, initialCenter = preview.world.byCode["BRA"]!!.capital)
         Box(Modifier.fillMaxSize().background(Brush.verticalGradient(listOf(Ink.oceanDeep.copy(alpha = 0.55f), Color.Transparent, Ink.oceanDeep.copy(alpha = 0.95f)))))
         Column(Modifier.fillMaxSize().statusBarsPadding().navigationBarsPadding().padding(24.dp)) {
-            Spacer(Modifier.height(36.dp))
+            Spacer(Modifier.height(28.dp))
+            androidx.compose.foundation.Image(
+                androidx.compose.ui.res.painterResource(com.dmwnezes.soberano.R.drawable.ic_launcher_fg), null,
+                Modifier.size(84.dp).offset(x = (-14).dp),
+            )
             Text("Soberano", style = Type.title.copy(fontSize = 52.sp, letterSpacing = (-1.5).sp), color = Ink.text)
             Text("O mundo de 2026 em suas mãos.", style = Type.body.copy(fontSize = 17.sp), color = Ink.muted)
             Spacer(Modifier.weight(1f))
@@ -127,7 +132,7 @@ fun SlotsDialog(store: SaveStore, saving: Boolean, onDismiss: () -> Unit, onPick
 @Composable
 fun Overlay(onDismiss: () -> Unit, dismissable: Boolean = true, content: @Composable androidx.compose.foundation.layout.ColumnScope.() -> Unit) {
     Box(
-        Modifier.fillMaxSize().background(Color(0xB3061218)).clickable(
+        Modifier.fillMaxSize().background(Color(0xB30A0D08)).clickable(
             interactionSource = remember { androidx.compose.foundation.interaction.MutableInteractionSource() }, indication = null,
         ) { if (dismissable) onDismiss() },
         contentAlignment = Alignment.Center,

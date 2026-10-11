@@ -87,6 +87,10 @@ object Content {
     )
     val lawById = laws.associateBy { it.id }
 
+    /** Leis criadas pelo jogador na partida atual (montadas por [LawMaker]). */
+    val customLaws = HashMap<String, Law>()
+    fun law(id: String): Law? = lawById[id] ?: customLaws[id]
+
     private fun lowIdx(a: Area): (Game, Nation) -> Float = { _, n -> 0.5f + (100f - n.index[a.ordinal]) / 50f }
 
     val events: List<EventDef> = listOf(

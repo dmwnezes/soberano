@@ -34,6 +34,26 @@ class GameController(val sim: Sim, private val store: SaveStore, private val sco
     var focusNation by mutableIntStateOf(-1)
     var mapMode by mutableStateOf(MapMode.POLITICAL)
     var showSettings by mutableStateOf(false)
+    var lawEditor by mutableStateOf(false)
+    /** lei aberta na explicação detalhada */
+    var lawInfo by mutableStateOf<String?>(null)
+
+    /** Destino escolhido para o exército selecionado (cartão de ordem). */
+    var orderTarget by mutableIntStateOf(-1)
+    var previewPath: IntArray = IntArray(0)
+    var previewDays = 0
+
+    fun chooseTarget(p: Int) {
+        val a = game.armies.firstOrNull { it.id == selArmy } ?: return
+        orderTarget = p
+        val pv = sim.military.preview(a, p)
+        previewPath = pv?.first ?: IntArray(0)
+        previewDays = pv?.second ?: -1
+        tick++
+    }
+
+    fun clearTarget() { orderTarget = -1; previewPath = IntArray(0); tick++ }
+
     /** Província escolhida para produzir (gaveta Militar). */
     var buildProvince by mutableIntStateOf(-1)
     val toasts = mutableStateListOf<Toast>()

@@ -15,27 +15,27 @@ import androidx.compose.ui.unit.sp
 import com.dmwnezes.soberano.R
 
 /**
- * Paleta "carta náutica noturna": oceano azul-petróleo com quadrícula,
- * terras em tons de papel antigo, latão para o jogador e verdete para o que é amigo.
+ * Paleta "sala de guerra": oliva militar escuro, areia para o texto,
+ * laranja de alerta para o jogador e verde para o que é amigo.
  */
 object Ink {
-    val ocean = Color(0xFF0E2A33)
-    val oceanDeep = Color(0xFF0A1F27)
-    val grid = Color(0xFF1C4350)
-    val panel = Color(0xF2122630)
-    val panelSolid = Color(0xFF122630)
-    val raised = Color(0xFF1A3440)
-    val line = Color(0xFF2A4C59)
-    val text = Color(0xFFEAF1EE)
-    val muted = Color(0xFF8FA9AE)
-    val faint = Color(0xFF5E7A80)
-    val brass = Color(0xFFE8B04B)
-    val brassDeep = Color(0xFFB9832A)
-    val verdigris = Color(0xFF5FC4B0)
-    val coral = Color(0xFFE5675B)
-    val amber = Color(0xFFF0A23A)
-    val good = Color(0xFF7CC68A)
-    val onBrass = Color(0xFF2A1C05)
+    val ocean = Color(0xFF141A12)
+    val oceanDeep = Color(0xFF0D110B)
+    val grid = Color(0xFF263020)
+    val panel = Color(0xF21E2418)
+    val panelSolid = Color(0xFF1E2418)
+    val raised = Color(0xFF283020)
+    val line = Color(0xFF3A4530)
+    val text = Color(0xFFECE6D4)
+    val muted = Color(0xFFA8A48C)
+    val faint = Color(0xFF6E7260)
+    val brass = Color(0xFFF28C28)
+    val brassDeep = Color(0xFFC46A12)
+    val verdigris = Color(0xFF8DB06A)
+    val coral = Color(0xFFE3533F)
+    val amber = Color(0xFFE8B53A)
+    val good = Color(0xFF9CC07A)
+    val onBrass = Color(0xFF2A1606)
 
     fun tone(t: Int) = when (t) { 1 -> good; 2 -> amber; 3 -> coral; else -> muted }
 

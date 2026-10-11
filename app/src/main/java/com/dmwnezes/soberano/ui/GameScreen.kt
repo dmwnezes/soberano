@@ -75,6 +75,8 @@ fun GameScreen(
     var frame by remember { mutableLongStateOf(0L) }
     var nukeTargeting by remember { mutableStateOf(false) }
     var confirmNuke by remember { mutableStateOf(-1) }
+    /** país contra o qual o jogador quer declarar guerra para atacar (-1 = nenhum) */
+    var warTarget by remember { mutableStateOf(-1) }
 
     // relógio do jogo
     LaunchedEffect(c) {
@@ -97,6 +99,7 @@ fun GameScreen(
     BackHandler {
         when {
             nukeTargeting -> nukeTargeting = false
+            c.orderTarget >= 0 -> c.clearTarget()
             c.tab != null -> c.tab = null
             c.selArmy >= 0 || c.selProvince >= 0 -> { c.selArmy = -1; c.selProvince = -1 }
             else -> c.showSettings = true
@@ -113,7 +116,7 @@ fun GameScreen(
             mode = c.mapMode, focusNation = c.focusNation.takeIf { c.mapMode == MapMode.RELATIONS } ?: -1,
             outlineNation = game.player,
             highlightNation = c.focusNation.takeIf { c.tab == Tab.DIPLOMACY } ?: (if (c.selProvince >= 0) game.owner[c.selProvince] else -1),
-            selectedProvince = c.selProvince,
+            selectedProvince = if (c.orderTarget >= 0) c.orderTarget else c.selProvince,
             frame = frame + c.tick,
             initialCenter = c.me.capital,
             onTapProvince = { p ->
@@ -124,19 +127,15 @@ fun GameScreen(
                 }
                 val a = selArmy
                 if (a != null && a.owner == game.player && p >= 0) {
-                    if (p == a.province) { c.selArmy = -1; c.selProvince = p; c.refresh(); return@WorldMapView }
-                    val why = c.sim.military.order(a, p)
-                    if (why != null) c.say(why, 2) else c.say("${a.name} a caminho de ${c.sim.world.provinces[p].name}, ${etaDays(c, a)} dias", 0, "flag")
-                    c.refresh()
-                } else c.selectProvince(p)
+                    if (p == a.province) { c.clearTarget(); c.selArmy = -1; c.selProvince = p; c.refresh(); return@WorldMapView }
+                    // mostra o cartão de ordem: atacar, mover ou declarar guerra
+                    c.chooseTarget(p)
+                } else { c.clearTarget(); c.selectProvince(p) }
             },
             onTapArmy = { a ->
-                if (selArmy != null && selArmy.owner == game.player && a.owner != game.player && selArmy.domain == Domain.LAND) {
-                    // atacar o exército inimigo onde ele está
-                    val why = c.sim.military.order(selArmy, a.province)
-                    if (why != null) c.say(why, 2) else c.say("${selArmy.name} vai atacar em ${c.sim.world.provinces[a.province].name}", 0, "battle")
-                    c.refresh()
-                } else { c.selArmy = if (c.selArmy == a.id) -1 else a.id; c.selProvince = -1; c.refresh() }
+                if (selArmy != null && selArmy.owner == game.player && a.owner != game.player) {
+                    c.chooseTarget(a.province)
+                } else { c.clearTarget(); c.selArmy = if (c.selArmy == a.id) -1 else a.id; c.selProvince = -1; c.refresh() }
             },
         )
 
@@ -149,8 +148,11 @@ fun GameScreen(
             Spacer(Modifier.weight(1f))
             MapModeButton(c)
             Box(Modifier.fillMaxWidth()) {
-                androidx.compose.animation.AnimatedVisibility(c.tab == null && selArmy != null, enter = fadeIn() + slideInVertically { it / 2 }, exit = fadeOut()) {
+                androidx.compose.animation.AnimatedVisibility(c.tab == null && selArmy != null && c.orderTarget < 0, enter = fadeIn() + slideInVertically { it / 2 }, exit = fadeOut()) {
                     selArmy?.let { ArmyCard(c, it) }
+                }
+                androidx.compose.animation.AnimatedVisibility(c.tab == null && selArmy != null && c.orderTarget >= 0, enter = fadeIn() + slideInVertically { it / 2 }, exit = fadeOut()) {
+                    if (selArmy != null && c.orderTarget >= 0) OrderCard(c, selArmy, c.orderTarget, onDeclare = { warTarget = it })
                 }
                 androidx.compose.animation.AnimatedVisibility(c.tab == null && selArmy == null && c.selProvince >= 0, enter = fadeIn() + slideInVertically { it / 2 }, exit = fadeOut()) {
                     if (c.selProvince >= 0) ProvinceCard(c, c.selProvince)
@@ -193,6 +195,34 @@ fun GameScreen(
 
         if (confirmNuke >= 0) NukeConfirm(c, confirmNuke) { confirmNuke = -1 }
 
+        if (warTarget >= 0) {
+            val enemy = c.sim.nation(warTarget)
+            val army = selArmy
+            val allies = game.nations.filter { it.alive && it.id != enemy.id && it.id != game.player && c.sim.allied(it.id, enemy.id) && !c.sim.allied(it.id, game.player) }
+            Overlay({ warTarget = -1 }) {
+                Icon(Icons.Rounded.Whatshot, null, tint = Ink.coral, modifier = Modifier.size(40.dp).align(Alignment.CenterHorizontally))
+                Text("Declarar guerra a ${enemy.name}?", style = Type.title.copy(fontSize = 22.sp), color = Ink.text, textAlign = TextAlign.Center, modifier = Modifier.fillMaxWidth())
+                Spacer(Modifier.height(8.dp))
+                Text(
+                    (if (allies.isEmpty()) "Ninguém deve entrar na guerra ao lado deles." else "Podem entrar ao lado deles: ${allies.take(5).joinToString { it.name }}${if (allies.size > 5) " e mais ${allies.size - 5}" else ""}.") +
+                        if (c.sim.hasTreaty(TreatyType.NON_AGGRESSION, game.player, enemy.id)) " Você vai quebrar um pacto de não agressão." else "",
+                    style = Type.body, color = Ink.muted, textAlign = TextAlign.Center, modifier = Modifier.fillMaxWidth(),
+                )
+                Spacer(Modifier.height(16.dp))
+                Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Btn("Cancelar", Modifier.weight(1f), BtnKind.GHOST) { warTarget = -1 }
+                    Btn("Declarar e atacar", Modifier.weight(1f), BtnKind.DANGER) {
+                        c.sim.diplomacy.declareWar(game.player, enemy.id)
+                        if (army != null && c.orderTarget >= 0) {
+                            val why = c.sim.military.order(army, c.orderTarget)
+                            if (why != null) c.say(why, 2) else c.say("${army.name} avança sobre ${c.sim.world.provinces[c.orderTarget].name}", 0, "battle")
+                        }
+                        warTarget = -1; c.clearTarget(); c.mapMode = MapMode.WAR; c.refresh()
+                    }
+                }
+            }
+        }
+
         game.gameOver?.let { go ->
             Overlay({}, dismissable = false) {
                 Icon(if (go.win) Icons.Rounded.EmojiEvents else Icons.Rounded.HeartBroken, null,
@@ -212,6 +242,9 @@ fun GameScreen(
                 Btn("Menu inicial", Modifier.fillMaxWidth(), BtnKind.GHOST) { onExit() }
             }
         }
+
+        if (c.lawEditor) LawEditor(c) { c.lawEditor = false; c.refresh() }
+        c.lawInfo?.let { id -> LawInfo(c, id) { c.lawInfo = null; c.refresh() } }
 
         if (c.showSettings) SettingsOverlay(c, store, onExit, onLoad)
     }
@@ -466,7 +499,7 @@ private fun ArmyCard(c: GameController, a: Army) {
                 }
                 Text(if (mine) status else "${owner.name}, $status", style = Type.small, color = if (a.battle) Ink.coral else Ink.muted, maxLines = 1, overflow = TextOverflow.Ellipsis)
             }
-            IconBtn(Icons.Rounded.Close, size = 32.dp) { c.selArmy = -1; c.refresh() }
+            IconBtn(Icons.Rounded.Close, size = 32.dp) { c.selArmy = -1; c.clearTarget() }
         }
         Spacer(Modifier.height(10.dp))
         FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
@@ -488,7 +521,7 @@ private fun ArmyCard(c: GameController, a: Army) {
             Spacer(Modifier.height(10.dp))
             Text(
                 when (a.domain) {
-                    Domain.LAND -> "Toque numa província para marchar, ou num exército inimigo para atacar"
+                    Domain.LAND -> "Toque numa província para ver as opções: mover ou atacar"
                     Domain.SEA -> "Toque numa província costeira para navegar"
                     Domain.AIR -> "Toque numa base sua ou aliada; os aviões apoiam batalhas no alcance"
                 }, style = Type.small, color = Ink.brass,
@@ -501,6 +534,88 @@ private fun ArmyCard(c: GameController, a: Army) {
                 }
                 val others = g.armies.count { it.owner == a.owner && it.province == a.province && it.domain == a.domain && it.id != a.id && !it.moving }
                 if (others > 0) Btn("Juntar", Modifier.weight(1f), icon = Icons.Rounded.MergeType) { c.sim.military.mergeAllAt(a); c.refresh() }
+            }
+        }
+    }
+}
+
+/** Cartão que aparece ao tocar numa província com um exército seu selecionado. */
+@Composable
+private fun OrderCard(c: GameController, a: Army, p: Int, onDeclare: (Int) -> Unit) {
+    @Suppress("UNUSED_EXPRESSION") c.tick
+    val g = c.game
+    val sim = c.sim
+    val me = g.player
+    val pr = sim.world.provinces[p]
+    val ctrl = g.controller[p]
+    val owner = sim.nation(g.owner[p])
+    val ctrlN = sim.nation(ctrl)
+    val atWar = sim.atWar(me, ctrl)
+    val enemyArmies = g.armies.any { it.province == p && it.domain == a.domain && sim.atWar(me, it.owner) }
+    val friendly = ctrl == me || sim.allied(me, ctrl) || sim.hasTreaty(TreatyType.PASSAGE, me, ctrl)
+    val neutral = !friendly && !atWar
+    val mine = if (a.domain == Domain.LAND) sim.military.landStrength(a) else sim.military.navalPower(a)
+    val theirs = if (a.domain == Domain.LAND) sim.military.enemyPowerAt(me, p)
+        else g.armies.filter { it.province == p && it.domain == Domain.SEA && it.owner != me && !sim.allied(me, it.owner) }.sumOf { sim.military.navalPower(it).toDouble() }.toFloat()
+    val noRoute = c.previewDays < 0
+    Column(Modifier.padding(horizontal = 12.dp, vertical = 8.dp).fillMaxWidth().clip(Shapes.card).background(Ink.panel).padding(16.dp)) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            FlagView(ctrlN, 22.dp)
+            Spacer(Modifier.width(10.dp))
+            Column(Modifier.weight(1f)) {
+                Text(pr.name, style = Type.heading, color = Ink.text, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                val who = if (ctrl != owner.id) "${owner.name}, ocupada por ${ctrlN.name}" else owner.name
+                Text(who, style = Type.small, color = Ink.muted, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            }
+            IconBtn(Icons.Rounded.Close, size = 32.dp) { c.clearTarget() }
+        }
+        Spacer(Modifier.height(10.dp))
+        val (stateText, stateColor) = when {
+            ctrl == me -> "Território seu" to Ink.good
+            atWar -> "Em guerra com ${ctrlN.name}" to Ink.coral
+            friendly -> "Território amigo: pode passar" to Ink.verdigris
+            else -> "Neutro: atacar exige declarar guerra" to Ink.amber
+        }
+        Text(stateText, style = Type.label, color = stateColor)
+        if ((atWar || neutral || enemyArmies) && a.domain != Domain.AIR) {
+            Spacer(Modifier.height(10.dp))
+            val total = (mine + theirs).coerceAtLeast(0.1f)
+            Row(Modifier.fillMaxWidth().height(8.dp).clip(Shapes.chip)) {
+                Box(Modifier.weight((mine / total).coerceAtLeast(0.02f)).height(8.dp).background(Ink.brass))
+                Box(Modifier.weight((theirs / total).coerceAtLeast(0.02f)).height(8.dp).background(Ink.coral))
+            }
+            Spacer(Modifier.height(4.dp))
+            val ratio = if (theirs <= 0f) 99f else mine / theirs
+            val verdict = when {
+                theirs <= 0f && a.domain == Domain.LAND -> "Sem defesa: cerco de ${sim.military.siegeDays(p).toInt()} dias"
+                theirs <= 0f -> "Nenhuma frota inimiga"
+                ratio > 1.6f -> "Vantagem clara"
+                ratio > 1.1f -> "Vantagem"
+                ratio > 0.85f -> "Equilibrado"
+                else -> "Desvantagem: risco de derrota"
+            }
+            Row {
+                Text("Você ${mine.toInt()}", style = Type.small, color = Ink.brass, modifier = Modifier.weight(1f))
+                Text(verdict, style = Type.small, color = if (ratio > 1.1f || theirs <= 0f) Ink.good else if (ratio > 0.85f) Ink.amber else Ink.coral)
+                Spacer(Modifier.weight(1f))
+                Text("Defesa ${theirs.toInt()}", style = Type.small, color = Ink.coral)
+            }
+        }
+        Spacer(Modifier.height(8.dp))
+        Text(if (noRoute) "Sem caminho até lá" else "Chega em ${c.previewDays} dias", style = Type.small, color = if (noRoute) Ink.coral else Ink.muted)
+        Spacer(Modifier.height(12.dp))
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            Btn("Cancelar", Modifier.weight(1f), BtnKind.GHOST) { c.clearTarget() }
+            fun go(verb: String) {
+                val why = sim.military.order(a, p)
+                if (why != null) c.say(why, 2) else c.say("${a.name} $verb ${pr.name}, ${etaDays(c, a)} dias", 0, if (verb.startsWith("ataca")) "battle" else "flag")
+                c.clearTarget()
+            }
+            when {
+                a.domain == Domain.AIR -> Btn("Mudar base", Modifier.weight(1.4f), BtnKind.PRIMARY, Icons.Rounded.Flight, enabled = friendly) { go("muda para") }
+                atWar || enemyArmies -> Btn("Atacar", Modifier.weight(1.4f), BtnKind.DANGER, Icons.Rounded.Whatshot, enabled = !noRoute) { go("ataca") }
+                neutral -> Btn("Declarar guerra e atacar", Modifier.weight(1.6f), BtnKind.DANGER, Icons.Rounded.Whatshot, enabled = !noRoute) { onDeclare(ctrl) }
+                else -> Btn(if (a.domain == Domain.SEA) "Navegar" else "Mover para cá", Modifier.weight(1.4f), BtnKind.PRIMARY, Icons.Rounded.Flag, enabled = !noRoute) { go("vai para") }
             }
         }
     }

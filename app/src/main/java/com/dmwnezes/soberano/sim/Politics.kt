@@ -8,7 +8,7 @@ class Politics(private val sim: Sim) {
     private val game get() = sim.game
 
     fun lawGroup(n: Nation, g: Group): Float =
-        n.laws.sumOf { (Content.lawById[it]?.groups?.get(g) ?: 0f).toDouble() }.toFloat()
+        n.laws.sumOf { (Content.law(it)?.groups?.get(g) ?: 0f).toDouble() }.toFloat()
 
     fun groupTarget(n: Nation, g: Group): Float {
         val idx = { a: Area -> n.index[a.ordinal] }
@@ -43,7 +43,7 @@ class Politics(private val sim: Sim) {
         val wsum = Group.entries.sumOf { it.weight.toDouble() }.toFloat()
         n.approval = Group.entries.sumOf { (n.groups[it.ordinal] * it.weight).toDouble() }.toFloat() / wsum
 
-        val lawStab = n.laws.sumOf { (Content.lawById[it]?.stability ?: 0f).toDouble() }.toFloat()
+        val lawStab = n.laws.sumOf { (Content.law(it)?.stability ?: 0f).toDouble() }.toFloat()
         val occ = sim.economy.occupiedFraction(n.id)
         val stTarget = 0.45f * n.approval + 0.25f * n.index[Area.SECURITY.ordinal] + 22f + lawStab -
             n.warExhaustion * 25f - occ * 30f - n.corruption * 0.1f
@@ -120,7 +120,7 @@ class Politics(private val sim: Sim) {
                 n.regime = if (n.regime.decree) Regime.PRESIDENTIAL else Regime.DICTATORSHIP
                 n.nextElection = if (n.regime.elections) game.day + 365 else -1
                 n.stability = 40f
-                n.laws.removeAll { Content.lawById[it]?.decreeOnly == true && !n.regime.decree }
+                n.laws.removeAll { Content.law(it)?.decreeOnly == true && !n.regime.decree }
                 sim.feed("protest", "Revolução em ${n.name}: novo governo", 2)
             }
         }
@@ -162,7 +162,9 @@ class Politics(private val sim: Sim) {
     fun lawCost(n: Nation, law: Law, enact: Boolean): Float {
         val base = if (n.regime.decree) 6f else 10f
         val congress = if (n.regime.congress && n.congress < 50f) (50f - n.congress) * 1.5f else 0f
-        return (base + congress) * (if (enact) 1f else 0.5f)
+        // leis criadas pelo jogador custam mais quanto mais polêmicas forem
+        val controversy = if (law.id.startsWith("custom_")) law.groups.values.sumOf { kotlin.math.abs(it).toDouble() }.toFloat() / 6f else 0f
+        return (base + congress + controversy) * (if (enact) 1f else 0.5f)
     }
 
     fun canEnact(n: Nation, law: Law): String? {
@@ -172,7 +174,7 @@ class Politics(private val sim: Sim) {
     }
 
     fun toggleLaw(n: Nation, id: String): Boolean {
-        val law = Content.lawById[id] ?: return false
+        val law = Content.law(id) ?: return false
         val enact = id !in n.laws
         canEnact(n, law)?.let { if (enact || it.startsWith("Capital")) return false }
         n.politicalCapital -= lawCost(n, law, enact)
@@ -199,7 +201,7 @@ class Politics(private val sim: Sim) {
         val wasDemocratic = n.regime.democratic
         n.regime = r
         if (r.elections) { if (n.nextElection < game.day) n.nextElection = game.day + 365 * 2 } else n.nextElection = -1
-        if (!r.decree) n.laws.removeAll { Content.lawById[it]?.decreeOnly == true }
+        if (!r.decree) n.laws.removeAll { Content.law(it)?.decreeOnly == true }
         if (wasDemocratic && !r.democratic) {
             n.groupMods[Group.YOUTH.ordinal] -= 20f; n.groupMods[Group.WORKERS.ordinal] -= 8f
             n.groupMods[Group.MILITARY.ordinal] += 10f

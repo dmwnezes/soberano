@@ -148,6 +148,39 @@ class SimulationTest {
         assertTrue(seen in 2..60)
     }
 
+    @Test fun customLawWorksAndSurvivesSave() {
+        val sim = TestWorld.newSim(seed = 21)
+        val me = sim.player
+        me.politicalCapital = 100f
+        val before = sim.politics.groupTarget(me, com.dmwnezes.soberano.sim.Group.YOUTH)
+        val cl = com.dmwnezes.soberano.sim.LawMaker.create(sim.game, "Pacote verde", listOf("desmatamento_zero", "cannabis"), 3)
+        val law = com.dmwnezes.soberano.sim.Content.law(cl.id)!!
+        val a = com.dmwnezes.soberano.sim.LawMaker.analyze(law, me, sim.game.natGdp(me.id))
+        println("resumo: ${a.summary}; ${a.consequences.joinToString { it.text }}")
+        assertTrue(a.supporters.contains(com.dmwnezes.soberano.sim.Group.YOUTH))
+        assertTrue(a.opponents.contains(com.dmwnezes.soberano.sim.Group.RELIGIOUS))
+        assertTrue(sim.politics.toggleLaw(me, cl.id))
+        assertTrue(sim.politics.groupTarget(me, com.dmwnezes.soberano.sim.Group.YOUTH) > before + 10)
+        // salvar e carregar mantém a lei funcionando
+        val dir = Files.createTempDirectory("law").toFile()
+        SaveStore(dir).save("1", sim.game)
+        com.dmwnezes.soberano.sim.Content.customLaws.clear()
+        val sim2 = Sim(TestWorld.world, SaveStore(dir).load("1")!!)
+        assertNotNull(com.dmwnezes.soberano.sim.Content.law(cl.id))
+        assertTrue(cl.id in sim2.player.laws)
+    }
+
+    @Test fun orderPreviewForNeutralTarget() {
+        val sim = TestWorld.newSim("BRA", seed = 22)
+        val a = sim.armiesOf(sim.player.id).first { it.domain == Domain.LAND }
+        val arg = sim.game.nations.first { it.code == "ARG" }
+        val pv = sim.military.preview(a, arg.capital)
+        assertNotNull(pv)
+        println("até Buenos Aires: ${pv!!.second} dias por ${pv.first.size} províncias")
+        // sem guerra, a ordem direta é recusada
+        assertNotNull(sim.military.order(a, arg.capital))
+    }
+
     @Test fun nuclearStrike() {
         val sim = TestWorld.newSim("USA", seed = 12)
         val g: Game = sim.game

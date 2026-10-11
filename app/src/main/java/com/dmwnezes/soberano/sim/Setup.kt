@@ -193,7 +193,7 @@ object Setup {
         val me = nations[game.player]
         if (!me.regime.elections) me.nextElection = -1
         else if (me.nextElection < 0) me.nextElection = 365 * 2
-        if (!me.regime.decree) me.laws.removeAll { Content.lawById[it]?.decreeOnly == true }
+        if (!me.regime.decree) me.laws.removeAll { Content.law(it)?.decreeOnly == true }
 
         // ---- forças armadas
         val mil = MilitarySeeder(world, game, ::r)
@@ -203,7 +203,13 @@ object Setup {
         return game
     }
 
+    /** Tons terrosos da paleta "sala de guerra" (o laranja fica reservado ao jogador). */
     val PALETTE = listOf(
+        0xFFB8A27AL, 0xFF8C9A6BL, 0xFFA87C62L, 0xFF7D8C8FL, 0xFFC4B27CL, 0xFF9A8AA8L, 0xFF6F9488L, 0xFFB98A57L,
+        0xFF9AA084L, 0xFFAEB27AL, 0xFFB09090L, 0xFF8EA3B0L, 0xFFC9A982L, 0xFF7F9A76L, 0xFFB7A0B4L, 0xFFA97F70L,
+    )
+    /** Paleta da versão 0.1, para converter saves antigos. */
+    val OLD_PALETTE = listOf(
         0xFFB9A47BL, 0xFF8FB08AL, 0xFFB98A8EL, 0xFF8E9EC2L, 0xFFC9BC7EL, 0xFFA48DBFL, 0xFF7FB0ACL, 0xFFCC9A6EL,
         0xFF9AA8A0L, 0xFFB7C08AL, 0xFFC4A0B8L, 0xFF92B6CCL, 0xFFD0B08CL, 0xFF8FA6B8L, 0xFFAFC4A2L, 0xFFC7928AL,
     )

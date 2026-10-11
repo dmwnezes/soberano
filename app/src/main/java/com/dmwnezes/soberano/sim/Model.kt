@@ -320,6 +320,7 @@ class Game(
     val proposals: MutableList<Proposal> = mutableListOf(),
     var gameOver: GameOver? = null,
     val achieved: MutableSet<Victory> = mutableSetOf(),
+    val customLaws: MutableList<CustomLaw> = mutableListOf(),
     var rngState: Long = 1L,
     var eventCalm: Int = 0,
 ) {
@@ -360,3 +361,7 @@ class TreatyCache(val keys: HashSet<Long>, val allied: BooleanArray) {
         fun key(t: TreatyType, a: Int, b: Int): Long = t.ordinal * 10_000_000_000L + a * 100_000L + b
     }
 }
+
+/** Lei montada pelo jogador a partir de medidas (ver LawMaker). */
+@Serializable
+class CustomLaw(val id: String, var name: String, val measures: List<String>, val intensity: Int = 2)

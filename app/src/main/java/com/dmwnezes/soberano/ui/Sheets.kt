@@ -105,28 +105,36 @@ fun GovernmentSheet(c: GameController) {
             val target = c.sim.politics.groupTarget(me, gr)
             MeterRow(GameIcons.group(gr), gr.label, me.groups[gr.ordinal], delta = target - me.groups[gr.ordinal])
         }
-        SectionTitle("Leis", trailing = { Text(if (me.regime.decree) "Por decreto" else "Pelo Congresso", style = Type.small, color = Ink.muted) })
-        for (law in Content.laws) {
+        SectionTitle("Leis", trailing = { Btn("Criar lei", kind = BtnKind.PRIMARY, icon = Icons.Rounded.Add) { c.lawEditor = true } })
+        Text(if (me.regime.decree) "Você aprova por decreto" else "O Congresso vota (apoio ${me.congress.toInt()}%)", style = Type.small, color = Ink.muted)
+        Spacer(Modifier.height(6.dp))
+        val all = g.customLaws.mapNotNull { Content.law(it.id) } + Content.laws
+        for (law in all) {
             if (law.decreeOnly && !me.regime.decree && law.id !in me.laws) continue
             val active = law.id in me.laws
+            val custom = law.id.startsWith("custom_")
             val cost = c.sim.politics.lawCost(me, law, !active).toInt()
             Row(
                 Modifier.fillMaxWidth().padding(vertical = 4.dp).clip(Shapes.tile)
                     .background(if (active) Ink.brass.copy(alpha = 0.13f) else Ink.raised)
                     .clickable { c.act(if (active) "Lei revogada" else "Lei aprovada") { if (c.sim.politics.toggleLaw(me, law.id)) null else c.sim.politics.canEnact(me, law) ?: "Não foi possível" } }
-                    .padding(14.dp),
+                    .padding(start = 14.dp, top = 12.dp, bottom = 12.dp, end = 6.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 Icon(GameIcons.of(law.icon), null, tint = if (active) Ink.brass else Ink.muted, modifier = Modifier.size(22.dp))
                 Spacer(Modifier.width(12.dp))
                 Column(Modifier.weight(1f)) {
-                    Text(law.name, style = Type.body.copy(fontWeight = FontWeight.SemiBold), color = Ink.text)
-                    Text(law.desc, style = Type.small, color = Ink.muted)
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text(law.name, style = Type.body.copy(fontWeight = FontWeight.SemiBold), color = Ink.text, modifier = Modifier.weight(1f, fill = false))
+                        if (custom) { Spacer(Modifier.width(6.dp)); Tag("sua", Ink.verdigris) }
+                    }
+                    Text(law.desc, style = Type.small, color = Ink.muted, maxLines = 2, overflow = TextOverflow.Ellipsis)
                 }
                 Column(horizontalAlignment = Alignment.End) {
                     Icon(if (active) Icons.Rounded.CheckCircle else Icons.Rounded.RadioButtonUnchecked, null, tint = if (active) Ink.brass else Ink.faint)
                     Text("⚡$cost", style = Type.small, color = Ink.faint)
                 }
+                IconBtn(Icons.Rounded.Info, size = 36.dp, bg = Color.Transparent, tint = Ink.muted) { c.lawInfo = law.id }
             }
         }
         SectionTitle("Regime")

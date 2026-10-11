@@ -267,7 +267,7 @@ class MapRenderer(private val world: WorldMap, typeface: Typeface?) {
 
     private fun labels(c: ACanvas, cam: MapCamera, sim: Sim, dp: Float, view: RectF) {
         val s = cam.scale
-        text.setShadowLayer(3f * dp, 0f, 0f, 0xCC0A1F27.toInt())
+        text.setShadowLayer(3f * dp, 0f, 0f, 0xCC0D110B.toInt())
         // nomes de países
         for (i in labelA.indices) {
             val a = labelA[i]
@@ -277,7 +277,7 @@ class MapRenderer(private val world: WorldMap, typeface: Typeface?) {
             val x = labelX[i] * s + cam.ox; val y = labelY[i] * s + cam.oy
             if (x < -200 || x > cam.viewW + 200 || y < -50 || y > cam.viewH + 50) continue
             text.textSize = size
-            text.color = 0xD8F4F1E8.toInt()
+            text.color = 0xD8ECE6D4.toInt()
             text.letterSpacing = if (size > 18 * dp) 0.06f else 0.02f
             c.drawText(sim.nation(i).name, x, y + size * 0.35f, text)
         }
@@ -289,7 +289,7 @@ class MapRenderer(private val world: WorldMap, typeface: Typeface?) {
                 val px = p.mapArea * s * s
                 if (px < 9000f * dp * dp) continue
                 text.textSize = 11f * dp
-                text.color = 0xB0EAF1EE.toInt()
+                text.color = 0xB0ECE6D4.toInt()
                 c.drawText(p.name, p.cx * s + cam.ox, p.cy * s + cam.oy + 14f * dp, text)
             }
         }
@@ -345,7 +345,7 @@ class MapRenderer(private val world: WorldMap, typeface: Typeface?) {
             if (a.owner != me || a.path.isEmpty()) continue
             val selected = ui?.selArmy == a.id
             dash.strokeWidth = (if (selected) 2.6f else 1.6f) * dp
-            dash.color = if (selected) Ink.brass.toArgb() else 0x99E8B04B.toInt()
+            dash.color = if (selected) Ink.brass.toArgb() else 0x99F28C28.toInt()
             dash.pathEffect = DashPathEffect(floatArrayOf(6 * dp, 5 * dp), -(timeMs / 30f) % (11 * dp))
             val path = Path()
             val start = armyPos(a, sim)
@@ -355,6 +355,23 @@ class MapRenderer(private val world: WorldMap, typeface: Typeface?) {
             val end = world.provinces[a.path.last()]
             marker.style = Paint.Style.FILL; marker.color = dash.color
             c.drawCircle(sx(end.cx), sy(end.cy), 3.5f * dp, marker)
+        }
+
+        // prévia do trajeto da ordem
+        val sel = g.armies.firstOrNull { it.id == ui?.selArmy }
+        val pv = ui?.previewPath
+        if (sel != null && pv != null && pv.isNotEmpty() && (ui.orderTarget >= 0)) {
+            dash.strokeWidth = 2.6f * dp
+            dash.color = 0xFFECE6D4.toInt()
+            dash.pathEffect = DashPathEffect(floatArrayOf(3 * dp, 6 * dp), -(timeMs / 25f) % (9 * dp))
+            val path = Path()
+            val st = world.provinces[sel.province]
+            path.moveTo(sx(st.cx), sy(st.cy))
+            for (q in pv) { val p = world.provinces[q]; path.lineTo(sx(p.cx), sy(p.cy)) }
+            c.drawPath(path, dash)
+            val end = world.provinces[pv.last()]
+            marker.style = Paint.Style.STROKE; marker.strokeWidth = 2.5f * dp; marker.color = 0xFFECE6D4.toInt()
+            c.drawCircle(sx(end.cx), sy(end.cy), (9f + 3f * ((sin(timeMs / 180.0) + 1) / 2).toFloat()) * dp, marker)
         }
 
         // cercos
@@ -406,7 +423,7 @@ class MapRenderer(private val world: WorldMap, typeface: Typeface?) {
             val selected = ui?.selArmy == a.id
             val enemy = sim.atWar(me, a.owner)
             marker.style = Paint.Style.FILL
-            marker.color = 0xE6122630.toInt()
+            marker.color = 0xE61E2418.toInt()
             c.drawRoundRect(r, 7 * dp, 7 * dp, marker)
             // faixa com a cor do país
             marker.color = owner.mapColor.toInt()
@@ -431,7 +448,7 @@ class MapRenderer(private val world: WorldMap, typeface: Typeface?) {
 
     private fun glyph(c: ACanvas, d: Domain, x: Float, y: Float, dp: Float) {
         marker.style = Paint.Style.FILL
-        marker.color = 0xFF0E2A33.toInt()
+        marker.color = 0xFF141A12.toInt()
         val p = Path()
         when (d) {
             Domain.LAND -> { // escudo
@@ -460,8 +477,8 @@ object MapColors {
         fun ch(sh: Int) = (((a shr sh) and 0xff) + (((b shr sh) and 0xff) - ((a shr sh) and 0xff)) * tt).toInt()
         return (0xff shl 24) or (ch(16) shl 16) or (ch(8) shl 8) or ch(0)
     }
-    private val NEUTRAL = 0xFF6F8384.toInt()
-    private val DIM = 0xFF4E6266.toInt()
+    private val NEUTRAL = 0xFF7C806A.toInt()
+    private val DIM = 0xFF4E5444.toInt()
 
     fun compute(sim: Sim, mode: MapMode, focus: Int): Pair<IntArray, IntArray> {
         val g = sim.game
@@ -479,7 +496,7 @@ object MapColors {
                     sim.allied(f, i) -> Ink.verdigris.toArgb()
                     else -> {
                         val r = g.rel(f, i)
-                        if (r >= 0) lerp(NEUTRAL, 0xFF4FA392.toInt(), r / 100f) else lerp(NEUTRAL, 0xFFB8574D.toInt(), -r / 100f)
+                        if (r >= 0) lerp(NEUTRAL, 0xFF7FA35A.toInt(), r / 100f) else lerp(NEUTRAL, 0xFFB5493A.toInt(), -r / 100f)
                     }
                 }
                 MapMode.WAR -> when {
@@ -491,12 +508,12 @@ object MapColors {
                 }
                 MapMode.APPROVAL -> {
                     val a = n.approval
-                    if (a < 50f) lerp(0xFFB8574D.toInt(), 0xFFC9A04F.toInt(), a / 50f) else lerp(0xFFC9A04F.toInt(), 0xFF5FA36E.toInt(), (a - 50f) / 50f)
+                    if (a < 50f) lerp(0xFFB5493A.toInt(), 0xFFC9A04F.toInt(), a / 50f) else lerp(0xFFC9A04F.toInt(), 0xFF7FA35A.toInt(), (a - 50f) / 50f)
                 }
                 MapMode.WEALTH -> {
                     val pc = g.natGdp(i) * 1e9 / max(1.0, g.natPop(i))
                     val t = ((ln(max(500.0, pc)) - ln(500.0)) / (ln(90000.0) - ln(500.0))).toFloat()
-                    lerp(0xFF3A4B52.toInt(), 0xFF9FD8C2.toInt(), t)
+                    lerp(0xFF3A4234.toInt(), 0xFFD9CFA0.toInt(), t)
                 }
             }
         }

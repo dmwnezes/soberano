@@ -77,6 +77,17 @@ class ScreensRenderTest {
             c.selArmy = army.id; c.refresh()
         }
         shot("05_exercito")
+        // ordem de ataque: exército selecionado + toque em província vizinha estrangeira
+        rule.runOnIdle {
+            sim.military.stop(army)
+            c.chooseTarget(sim.game.nations.first { it.code == "PRY" }.capital)
+        }
+        shot("06_ordem_neutro")
+        rule.runOnIdle { c.clearTarget(); c.lawEditor = true; c.refresh() }
+        shot("07_criar_lei")
+        rule.runOnIdle { c.lawEditor = false; c.lawInfo = "imposto_fortunas"; c.refresh() }
+        shot("08_lei_info")
+        rule.runOnIdle { c.lawInfo = null; c.refresh() }
         for ((i, t) in Tab.entries.withIndex()) {
             rule.runOnIdle { c.selArmy = -1; c.selProvince = -1; c.tab = t; c.refresh() }
             shot("1${i}_${t.name.lowercase()}")

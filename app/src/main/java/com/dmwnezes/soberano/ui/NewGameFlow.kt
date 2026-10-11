@@ -154,7 +154,7 @@ fun CountrySearch(sim: Sim, onDismiss: () -> Unit, onPick: (Int) -> Unit) {
         sim.game.nations.filter { it.alive && (norm.isEmpty() || strip(it.name.lowercase()).contains(strip(norm))) }
             .sortedByDescending { sim.game.natGdp(it.id) }
     }
-    Box(Modifier.fillMaxSize().background(Color(0xE6061218)).statusBarsPadding().navigationBarsPadding().imePadding()) {
+    Box(Modifier.fillMaxSize().background(Color(0xE60A0D08)).statusBarsPadding().navigationBarsPadding().imePadding()) {
         Column(Modifier.fillMaxSize().padding(16.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 IconBtn(Icons.AutoMirrored.Rounded.ArrowBack, onClick = onDismiss)
@@ -204,7 +204,7 @@ private fun CreateStep(preview: Sim, territory: Int, onBack: () -> Unit, onDone:
     var emblem by remember { mutableIntStateOf(1) }
     val colors = remember { mutableStateOf(listOf(0xFF1565C0L, 0xFFFFFFFFL, 0xFFC62828L, 0xFFFFD54FL)) }
     var editing by remember { mutableIntStateOf(0) }
-    var mapColor by remember { mutableStateOf(0xFFC9A04FL) }
+    var mapColor by remember { mutableStateOf(0xFFC9A06AL) }
     val flag = Flag(layout, colors.value, emblem)
     val base = preview.game.nations[territory]
     Column(Modifier.fillMaxSize().navigationBarsPadding().imePadding()) {
@@ -245,7 +245,7 @@ private fun CreateStep(preview: Sim, territory: Int, onBack: () -> Unit, onDone:
             Segmented(listOf(0, 1, 2, 3, 4), emblem, { listOf("Nenhum", "Estrela", "Sol", "Lua", "Escudo")[it] }) { emblem = it }
             SectionTitle("Cor no mapa")
             FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                for (c in listOf(0xFFC9A04FL, 0xFF5FA392L, 0xFFB8574DL, 0xFF7E8FC4L, 0xFFA77FC0L, 0xFFD08A5AL, 0xFF8FB08AL, 0xFFD3C27AL)) {
+                for (c in listOf(0xFFC9A06AL, 0xFF8C9A6BL, 0xFFA87C62L, 0xFF7D8C8FL, 0xFF9A8AA8L, 0xFFB98A57L, 0xFF6F9488L, 0xFFD1C08AL)) {
                     val sel = c == mapColor
                     Box(Modifier.size(40.dp).clip(CircleShape).background(Color(c.toInt())).border(if (sel) 3.dp else 1.dp, if (sel) Ink.text else Ink.line, CircleShape).clickable { mapColor = c })
                 }

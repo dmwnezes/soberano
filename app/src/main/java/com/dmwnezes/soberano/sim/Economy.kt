@@ -27,7 +27,7 @@ class Economy(private val sim: Sim) {
         UnitType.entries.sumOf { t -> a.units[t.ordinal] * t.upkeep }
     } + sim.nation(id).nukes * NUKE_COST * 0.01
 
-    fun lawSum(n: Nation, f: (Law) -> Float): Float = n.laws.sumOf { (Content.lawById[it]?.let(f) ?: 0f).toDouble() }.toFloat()
+    fun lawSum(n: Nation, f: (Law) -> Float): Float = n.laws.sumOf { (Content.law(it)?.let(f) ?: 0f).toDouble() }.toFloat()
 
     fun budget(n: Nation): Budget {
         val gdp = game.natGdp(n.id)
@@ -73,7 +73,7 @@ class Economy(private val sim: Sim) {
     fun indexTarget(n: Nation, a: Area): Float {
         if (!a.hasIndex) return 0f
         var t = Setup.target(a, n.shares[a.ordinal])
-        t += n.laws.sumOf { (Content.lawById[it]?.index?.get(a) ?: 0f).toDouble() }.toFloat()
+        t += n.laws.sumOf { (Content.law(it)?.index?.get(a) ?: 0f).toDouble() }.toFloat()
         t += (n.tech[TechBranch.SOCIETY.ordinal] - 3) * 1f
         if (a == Area.SECURITY) t -= occupiedFraction(n.id) * 30f
         return t.coerceIn(0f, 100f)
