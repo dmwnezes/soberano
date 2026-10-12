@@ -22,12 +22,20 @@ class Sim(val world: WorldMap, val game: Game) {
     val unitedNations = UnitedNations(this)
     val news = News(this)
     val policy = Policies(this)
+    val space = Space(this)
+    val trade = TradeRoutes(this)
+    val insurgency = Insurgencies(this)
+    val congress = Congress(this)
+    val speeches = Speeches(this)
+    val currency = Currency(this)
+    val buildings = Buildings(this)
 
     init {
         LawMaker.register(game)
         game.ensureArrays()
         if (game.generalPool.isEmpty()) military.refreshGeneralPool()
         dev.ensureCabinet()
+        congress.ensure()
         // saves da versão 0.1 usavam outra paleta
         for (n in game.nations) {
             val k = Setup.OLD_PALETTE.indexOf(n.mapColor)
@@ -142,23 +150,41 @@ class Sim(val world: WorldMap, val game: Game) {
         military.dailyCombat()
         military.dailyAutoMerge()
         military.dailySiege()
+        space.daily()
+        buildings.daily()
         ai.daily()
 
         if (today.month != before.month) monthly()
+        else {
+            // o mês de cada país do computador cai num dia diferente: evita um "soluço" grande na virada do mês
+            val dom = today.dayOfMonth
+            var any = false
+            for (n in game.nations) if (n.alive && n.id != game.player && n.id % 28 + 1 == dom) { monthlyNation(n); any = true }
+            if (any) game.invalidate()
+        }
         diplomacy.expireTreaties()
         touch()
     }
 
+    /** Economia, política e recrutamento de um país (uma vez por mês). */
+    private fun monthlyNation(n: Nation) {
+        economy.monthly(n)
+        policy.monthly(n)
+        politics.monthly(n)
+        dev.monthlyNation(n)
+        currency.monthly(n)
+    }
+
+    /** Virada do mês: o jogador e os sistemas globais. Os outros países fecham o mês em dias espalhados. */
     private fun monthly() {
         game.invalidate()
-        for (n in game.nations) if (n.alive) {
-            economy.monthly(n)
-            policy.monthly(n)
-            politics.monthly(n)
-        }
+        if (player.alive) monthlyNation(player)
         military.monthlyResistance()
         diplomacy.monthly()
         dev.monthly()
+        trade.monthly()
+        insurgency.monthly()
+        congress.monthly()
         civil.monthly()
         unitedNations.monthly()
         events.monthly()

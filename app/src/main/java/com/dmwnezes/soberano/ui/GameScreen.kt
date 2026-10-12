@@ -220,6 +220,8 @@ fun GameScreen(
         when (c.dialog) {
             "spread" -> SpreadDialog(c) { c.dialog = null }
             "gather" -> GatherDialog(c) { c.dialog = null }
+            "speech" -> SpeechDialog(c)
+            "build" -> if (c.selProvince >= 0) BuildDialog(c, c.selProvince) else c.dialog = null
             "disband" -> game.armies.firstOrNull { it.id == c.selArmy }?.let { DisbandDialog(c, it) } ?: run { c.dialog = null }
         }
         if (c.showSearch) ProvinceSearch(c) { p ->
@@ -509,6 +511,7 @@ private fun ProvinceCard(c: GameController, p: Int) {
             }
         }
         FortRow(c, p)
+        ProvinceExtras(c, p)
         if (g.owner[p] == me && ctrl == me) {
             val isRally = g.rallyPoint == p
             Text(if (isRally) "Ponto de reunião · toque para treinar em todos os estados" else "Concentrar reservistas aqui",
@@ -683,11 +686,28 @@ private fun OrderCard(c: GameController, a: Army, p: Int, onDeclare: (Int) -> Un
         }
         Spacer(Modifier.height(8.dp))
         Text(if (noRoute) "Sem caminho até lá" else "Chega em ${c.previewDays} dias", style = Type.small, color = if (noRoute) Ink.coral else Ink.muted)
+        // rota além-mar: avisa que vai de navio e quanto custa o frete
+        val viaSea = remember(a.id, p, c.tick) {
+            a.domain == Domain.LAND && sim.military.preview(a, p)?.first?.let { path ->
+                var prev = a.province; var sea = false
+                for (q in path) { if (!sim.military.isLandNeighbor(prev, q)) sea = true; prev = q }
+                sea
+            } == true
+        }
+        if (viaSea && !noRoute) {
+            val freight = sim.military.shippingCost(a)
+            Row(Modifier.padding(top = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+                Icon(Icons.Rounded.DirectionsBoat, null, tint = Ink.verdigris, modifier = Modifier.size(16.dp))
+                Spacer(Modifier.width(6.dp))
+                Text(if (freight > 0) "Cruza o mar · frete de navios ${Fmt.money(freight)}" else "Cruza o mar com seus transportes",
+                    style = Type.small, color = Ink.verdigris)
+            }
+        }
         // desembarque numa praia escolhida
-        val sea = remember(a.id, p, c.tick) { if (a.domain == Domain.LAND && pr.coastal && !neutral) sim.military.previewSea(a, p) else null }
+        val sea = remember(a.id, p, c.tick) { if (a.domain == Domain.LAND && pr.coastal && !neutral && !viaSea) sim.military.previewSea(a, p) else null }
         if (sea != null) {
-            val cap = sim.military.transportCapacity(g.player)
-            val ok = cap >= a.divisions()
+            val freight = sim.military.shippingCost(a)
+            val ok = c.me.militaryFund + c.me.treasury >= freight
             Row(
                 Modifier.fillMaxWidth().padding(top = 8.dp).clip(Shapes.tile).background(Ink.oceanDeep)
                     .clickable(enabled = ok) {
@@ -702,7 +722,8 @@ private fun OrderCard(c: GameController, a: Army, p: Int, onDeclare: (Int) -> Un
                 Column(Modifier.weight(1f)) {
                     Text("Desembarcar pelo mar", style = Type.label.copy(fontWeight = FontWeight.SemiBold), color = if (ok) Ink.text else Ink.faint)
                     Text(if (ok) "${sea.second} dias, saindo de ${sim.world.provinces[if (sea.first.size > 1) sea.first[sea.first.size - 2] else a.province].name}"
-                        else "Precisa de transportes para ${a.divisions().toInt()} divisões (tem para ${cap.toInt()})", style = Type.small, color = Ink.muted)
+                        .plus(if (freight > 0) " · frete ${Fmt.money(freight)}" else "")
+                        else "Frete de ${Fmt.money(freight)}: falta dinheiro", style = Type.small, color = Ink.muted)
                 }
             }
         }

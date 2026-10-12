@@ -209,6 +209,9 @@ class Ai(private val sim: Sim) {
         // ódio vira sanção
         for (o in neighborsOf(n.id)) if (game.rel(n.id, o) < -70f && sim.randf() < 0.05f &&
             game.treaties.none { it.type == TreatyType.SANCTION && it.a == n.id && it.b == o }) sim.diplomacy.sanction(n.id, o, false)
+        sim.space.ai(n)
+        sim.buildings.ai(n)
+        sim.trade.ai(n)
         // mobilização geral em guerra longa; desmobiliza na paz
         if (!n.mobilized && sim.atWarAny(n.id) && n.politicalCapital >= sim.policy.mobilizeCost + 10f && sim.randf() < 0.1f) sim.policy.toggleMobilization(n)
         else if (n.mobilized && !sim.atWarAny(n.id)) n.mobilized = false

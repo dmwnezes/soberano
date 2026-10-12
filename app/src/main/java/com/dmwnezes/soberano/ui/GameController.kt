@@ -17,7 +17,7 @@ import java.io.File
 
 enum class Tab(val label: String) { GOVERNMENT("Governo"), ECONOMY("Economia"), DIPLOMACY("Diplomacia"), MILITARY("Militar"), WORLD("Mundo") }
 
-enum class MapMode(val label: String) { POLITICAL("Político"), RELATIONS("Relações"), WAR("Guerra"), APPROVAL("Aprovação"), WEALTH("Riqueza") }
+enum class MapMode(val label: String) { POLITICAL("Político"), RELATIONS("Relações"), WAR("Guerra"), APPROVAL("Aprovação"), WEALTH("Riqueza"), TRADE("Comércio") }
 
 class Toast(val id: Long, val icon: String, val text: String, val tone: Int, val province: Int, val born: Long)
 
@@ -103,10 +103,14 @@ class GameController(val sim: Sim, private val store: SaveStore, private val sco
         if (vote && !hadVote) feedback?.play(Sfx.VOTE)
         hadVote = vote
         if (paused || blocked) { acc = 0.0; return }
+        // enquanto o jogo é gravado em segundo plano, o tempo espera (a tela continua fluida)
+        if (saving) { acc = 0.0; return }
         acc += dtSec.coerceAtMost(0.25)
         val len = dayLength[(speed - 1).coerceIn(0, 4)]
         var days = 0
-        while (acc >= len && days < 3 && !blocked) {
+        val start = System.nanoTime()
+        // limite de tempo por quadro: se os dias custarem caro, o resto fica para o próximo quadro em vez de travar a tela
+        while (acc >= len && days < 3 && !blocked && !saving && System.nanoTime() - start < 12_000_000L) {
             sim.advanceDay()
             acc -= len
             days++
@@ -114,6 +118,7 @@ class GameController(val sim: Sim, private val store: SaveStore, private val sco
             // salva a cada três meses (gravar a cada mês travava a tela em velocidade alta)
             if (m != lastMonth) { lastMonth = m; if (m % 3 == 1) autosave() }
         }
+        if (acc > len * 3) acc = len * 3 // não acumula atraso
         // redesenha a interface no máximo ~10 vezes por segundo (economiza bateria em velocidade alta)
         if (days > 0 && nowMs - lastTickMs >= 100) { tick++; lastTickMs = nowMs }
         if (blocked) { paused = true; tick++ }
@@ -158,12 +163,29 @@ class GameController(val sim: Sim, private val store: SaveStore, private val sco
 
     fun autosave() = save("auto")
 
+    @Volatile var saving = false
+        private set
+
+    /** Grava em segundo plano; o relógio do jogo espera terminar para não haver mudanças no meio da gravação. */
     fun save(slot: String) {
-        val text = runCatching { SaveStore.json.encodeToString(game) }.getOrNull() ?: return
+        if (saving) return
+        saving = true
         val meta = me.name
-        scope.launch(Dispatchers.IO) {
-            runCatching { store.saveText(slot, text, game.day, meta, game.leaderTitle.label) }
+        val day = game.day
+        val title = game.leaderTitle.label
+        scope.launch(Dispatchers.Default) {
+            try {
+                val text = SaveStore.json.encodeToString(game)
+                store.saveText(slot, text, day, meta, title)
+            } catch (_: Throwable) {
+            } finally { saving = false }
         }
+    }
+
+    /** Gravação imediata (ao sair do app). */
+    fun saveNow(slot: String = "auto") {
+        val text = runCatching { SaveStore.json.encodeToString(game) }.getOrNull() ?: return
+        runCatching { store.saveText(slot, text, game.day, me.name, game.leaderTitle.label) }
     }
 }
 

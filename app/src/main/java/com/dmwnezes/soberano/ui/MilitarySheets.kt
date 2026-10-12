@@ -352,6 +352,8 @@ private fun MilTech(c: GameController, onNuke: () -> Unit) {
     val sim = c.sim
     SheetBody {
         Spacer(Modifier.height(6.dp))
+        SpaceSection(c)
+        SectionTitle("Pesquisa")
         Text("Toque num ramo para concentrar a pesquisa nele.", style = Type.small, color = Ink.muted)
         for (br in TechBranch.entries) {
             val focus = me.researchFocus == br.ordinal

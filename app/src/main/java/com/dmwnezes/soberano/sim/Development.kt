@@ -237,7 +237,8 @@ class Development(private val sim: Sim) {
     fun tradeGrowth(n: Nation): Float {
         val gdp = game.natGdp(n.id)
         if (gdp <= 0) return 0f
-        return (tradeBalance(n.id) / gdp.toFloat() * 0.08f).coerceIn(-0.015f, 0.02f)
+        val g = (tradeBalance(n.id) / gdp.toFloat() * 0.08f).coerceIn(-0.015f, 0.02f)
+        return if (sim.trade.blockaded(n.id)) min(g, 0f) else g
     }
 
     // ============================================================ ministros
@@ -525,15 +526,17 @@ class Development(private val sim: Sim) {
 
     // ============================================================ mês
 
+    /** Parte do mês que é de cada país (chamada no dia do mês daquele país). */
+    fun monthlyNation(n: Nation) {
+        monthlyTrade(n)
+        monthlyProjects(n)
+        monthlyRecruits(n)
+    }
+
     fun monthly() {
         monthlyPrices()
         ensureCabinet()
         monthlyCabinet()
-        for (n in game.nations) if (n.alive) {
-            monthlyTrade(n)
-            monthlyProjects(n)
-            monthlyRecruits(n)
-        }
         monthlyDeals()
         offersToPlayer()
         aiDeals()

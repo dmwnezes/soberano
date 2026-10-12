@@ -38,7 +38,7 @@ class Economy(private val sim: Sim) {
         civil *= sim.policy.civilMult(n)
         val defense = gdp * n.shares[Area.DEFENSE.ordinal] / 12.0
         val ratio = if (gdp > 0) min(n.debt / gdp, 2.5) else 0.0
-        val interest = n.debt * (0.008 + 0.012 * ratio) / 12.0 * sim.policy.interestMult(n)
+        val interest = n.debt * (0.008 + 0.012 * ratio) / 12.0 * sim.policy.interestMult(n) * sim.currency.interestMult(n)
         return Budget(gdp, revenue, civil, defense, interest, upkeep(n.id))
     }
 
@@ -84,6 +84,7 @@ class Economy(private val sim: Sim) {
         if (game.settings.economy != EconomyDepth.SIMPLE) g -= min(0.03f, max(0f, n.inflation - 6f) * 0.002f)
         g += lawSum(n) { it.growth }
         g += sim.policy.growthEffect(n)
+        g += sim.trade.growthEffect(n) + sim.currency.growthEffect(n) + sim.buildings.tradeBonus(n)
         g += sim.dev.tradeGrowth(n) + sim.dev.builtGrowth(n)
         if (sim.unitedNations.inClimateDeal(n.id)) g -= 0.002f
         if (sim.unitedNations.has(ResolutionType.RECONSTRUCTION, n.id)) g += 0.01f
@@ -99,6 +100,7 @@ class Economy(private val sim: Sim) {
         t += n.laws.sumOf { (Content.law(it)?.index?.get(a) ?: 0f).toDouble() }.toFloat()
         t += (n.tech[TechBranch.SOCIETY.ordinal] - 3) * 1f
         t += sim.dev.builtIndex(n, a)
+        t += sim.buildings.indexBonus(n, a)
         if (a == Area.ENVIRONMENT && sim.unitedNations.inClimateDeal(n.id)) t += 5f
         if (a == Area.SECURITY) t -= occupiedFraction(n.id) * 30f
         return t.coerceIn(0f, 100f)
@@ -151,7 +153,7 @@ class Economy(private val sim: Sim) {
         // inflação e desemprego
         val deficit = max(0.0, -balance * 12.0) / b.gdp
         val inflTarget = if (game.settings.economy == EconomyDepth.SIMPLE) 3f
-        else (3f + 25f * deficit.toFloat() + lawSum(n) { it.inflation } + sim.policy.inflationEffect(n)).coerceIn(0f, 80f)
+        else (3f + 25f * deficit.toFloat() + lawSum(n) { it.inflation } + sim.policy.inflationEffect(n) + sim.currency.inflationEffect(n)).coerceIn(0f, 80f)
         n.inflation += (inflTarget - n.inflation) * 0.2f
         val uTarget = 7f - (g * 100f - 2f) * 1.2f + (if (sim.atWarAny(n.id)) 1.5f else 0f)
         n.unemployment += (uTarget.coerceIn(1.5f, 40f) - n.unemployment) * 0.2f
@@ -169,7 +171,7 @@ class Economy(private val sim: Sim) {
     fun techCost(level: Int): Float = 10f * level.toFloat().pow(1.5f)
 
     private fun research(n: Nation, gdp: Double) {
-        val pts = (2f + n.index[Area.RESEARCH.ordinal] / 20f + log10(gdp + 1).toFloat() * 1.5f + sim.dev.builtResearch(n)) *
+        val pts = (2f + n.index[Area.RESEARCH.ordinal] / 20f + log10(gdp + 1).toFloat() * 1.5f + sim.dev.builtResearch(n) + sim.space.researchBonus(n) + sim.buildings.researchBonus(n)) *
             (0.6f + n.index[Area.EDUCATION.ordinal] / 125f)
         for (b in TechBranch.entries) {
             val share = if (b.ordinal == n.researchFocus) 0.6f else 0.08f

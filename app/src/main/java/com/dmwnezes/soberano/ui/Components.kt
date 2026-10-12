@@ -109,6 +109,12 @@ object GameIcons {
         "mobilize" -> Icons.Rounded.Campaign
         "mercs" -> Icons.Rounded.Payments
         "ai" -> Icons.Rounded.AutoAwesome
+        "bolt" -> Icons.Rounded.Bolt
+        "plane2" -> Icons.Rounded.LocalAirport
+        "speech" -> Icons.Rounded.Mic
+        "congress" -> Icons.Rounded.AccountBalance
+        "currency" -> Icons.Rounded.CurrencyExchange
+        "anchor" -> Icons.Rounded.Anchor
         "temple" -> Icons.Rounded.Church
         "field" -> Icons.Rounded.Agriculture
         "lock" -> Icons.Rounded.Lock

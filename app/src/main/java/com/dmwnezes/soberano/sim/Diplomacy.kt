@@ -407,7 +407,7 @@ class Diplomacy(private val sim: Sim) {
 
     fun spyChance(from: Int, to: Int, m: SpyMission): Float {
         val a = sim.nation(from); val b = sim.nation(to)
-        return (0.55f + (a.index[Area.RESEARCH.ordinal] - b.index[Area.SECURITY.ordinal]) / 200f - m.difficulty / 100f).coerceIn(0.05f, 0.9f)
+        return (0.55f + (a.index[Area.RESEARCH.ordinal] - b.index[Area.SECURITY.ordinal]) / 200f - m.difficulty / 100f + sim.space.spyBonus(from) - sim.space.spyBonus(to) / 2f).coerceIn(0.05f, 0.9f)
     }
 
     /** Retorna o texto do resultado. */

@@ -51,7 +51,7 @@ class Politics(private val sim: Sim) {
         n.stability += (stTarget.coerceIn(0f, 100f) - n.stability) * 0.12f
 
         n.politicalCapital = min(100f, n.politicalCapital + n.approval / 20f + (if (n.regime.decree) 1.5f else 0f))
-        if (n.regime.congress) n.congress += ((0.7f * n.approval + 18f) - n.congress) * 0.15f
+        if (n.regime.congress && !sim.congress.active(n)) n.congress += ((0.7f * n.approval + 18f) - n.congress) * 0.15f
 
         // cansaço de guerra
         if (sim.atWarAny(n.id)) {
@@ -93,6 +93,7 @@ class Politics(private val sim: Sim) {
         share = if (win) share.coerceIn(50.3f, 85f) else share.coerceIn(15f, 49.7f)
         val opp = game.campaign.opponent.ifEmpty { campaigns.opponentName() }
         game.election = ElectionResult(game.day, share, win, opp)
+        sim.congress.afterElection(share, win)
         campaigns.reset()
         if (win) {
             sim.feed("vote", "Você foi reeleito com ${Fmt.one(share)}% dos votos contra $opp", 1)
@@ -190,10 +191,27 @@ class Politics(private val sim: Sim) {
         return null
     }
 
+    /** Motivo da última lei que não passou (para a interface). */
+    var lastFail: String? = null
+
     fun toggleLaw(n: Nation, id: String): Boolean {
+        lastFail = null
         val law = Content.law(id) ?: return false
         val enact = id !in n.laws
         canEnact(n, law)?.let { if (enact || it.startsWith("Capital")) return false }
+        // com partidos, o Congresso vota a lei (decretos não passam por lá)
+        if (enact && sim.congress.active(n) && !n.regime.decree) {
+            val (yes, no) = sim.congress.tally(law)
+            if (yes <= no) {
+                n.politicalCapital -= lawCost(n, law, true) * 0.3f
+                lastFail = "Congresso rejeitou: $yes a $no"
+                sim.feed("law", "Congresso rejeitou ${law.name} ($yes a $no)", 2)
+                sim.touch()
+                return false
+            }
+            sim.congress.afterLaw(law)
+            sim.feed("vote", "Congresso aprovou ${law.name} ($yes a $no)", 1)
+        }
         n.politicalCapital -= lawCost(n, law, enact)
         if (enact) {
             law.excludes?.let { n.laws.remove(it) }

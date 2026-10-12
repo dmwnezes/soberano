@@ -618,6 +618,7 @@ fun MapLegend(c: GameController, modifier: Modifier = Modifier) {
         MapMode.WAR -> listOf(Ink.brass to "Você", Ink.verdigris to "Aliado", Ink.coral to "Inimigo", Color(0xFF9C7A4A) to "Em outra guerra", Color(0xFF4E5444) to "Em paz")
         MapMode.APPROVAL -> listOf(Color(0xFF7FA35A) to "Aprovação alta", Color(0xFFC9A04F) to "Média", Color(0xFFB5493A) to "Baixa")
         MapMode.WEALTH -> listOf(Color(0xFFD9CFA0) to "Renda alta", Color(0xFF8A8A6A) to "Média", Color(0xFF3A4234) to "Baixa")
+        MapMode.TRADE -> listOf(Ink.brass to "Você", Ink.verdigris to "Parceiro comercial", Ink.coral to "Sanção ou embargo", Color(0xFF8A3A2E) to "Bloqueado", Color(0xFF7FC8A9) to "Canal aberto")
     }
     Column(modifier.clip(Shapes.tile).background(Ink.panel).padding(10.dp)) {
         Text(c.mapMode.label, style = Type.small.copy(fontWeight = FontWeight.SemiBold), color = Ink.text)

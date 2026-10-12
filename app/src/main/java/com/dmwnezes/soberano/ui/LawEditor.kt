@@ -147,6 +147,7 @@ fun LawEditor(c: GameController, onClose: () -> Unit) {
                                 Cell("Custo para aprovar", "⚡${cost.toInt()}", if (me.politicalCapital >= cost) Ink.brass else Ink.coral)
                                 Cell("Seu capital", "⚡${me.politicalCapital.toInt()}")
                             }
+                            VoteForecast(c, law)
                             if (me.regime.congress && me.congress < 50f)
                                 Text("O Congresso está contra você: aprovar sai mais caro.", style = Type.small, color = Ink.amber, modifier = Modifier.padding(top = 8.dp))
                         }
@@ -161,7 +162,7 @@ fun LawEditor(c: GameController, onClose: () -> Unit) {
                 }
                 Btn("Aprovar agora", Modifier.weight(1f), BtnKind.PRIMARY, Icons.Rounded.Gavel, enabled = chosen.isNotEmpty() && me.politicalCapital >= cost) {
                     val cl = LawMaker.create(c.game, name, chosen.toList(), intensity)
-                    if (!c.sim.politics.toggleLaw(me, cl.id)) c.say("Capital político insuficiente; a lei ficou guardada", 2)
+                    if (!c.sim.politics.toggleLaw(me, cl.id)) c.say((c.sim.politics.lastFail ?: "Capital político insuficiente") + "; a lei ficou guardada", 2)
                     onClose()
                 }
             }
@@ -239,6 +240,7 @@ fun LawInfo(c: GameController, id: String, onClose: () -> Unit) {
             } else Text(law.desc, style = Type.body, color = Ink.text)
             if (law.decreeOnly) Text("Só pode ser aprovada por decreto (ditadura ou monarquia absoluta).", style = Type.small, color = Ink.amber, modifier = Modifier.padding(top = 6.dp))
             Consequences(analysis)
+            if (!active) VoteForecast(c, law)
             law.excludes?.let { ex -> Content.law(ex)?.let { Text("Substitui: ${it.name}", style = Type.small, color = Ink.muted, modifier = Modifier.padding(top = 8.dp)) } }
             if (law.onEnact.isNotEmpty()) Text("Ao aprovar: " + law.onEnact.joinToString { c.sim.events.label(it, me) }, style = Type.small, color = Ink.good, modifier = Modifier.padding(top = 6.dp))
         }
@@ -247,7 +249,7 @@ fun LawInfo(c: GameController, id: String, onClose: () -> Unit) {
         Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
             if (custom != null && !active) IconBtn(Icons.Rounded.Delete, tint = Ink.coral) { LawMaker.delete(c.game, id); c.say("Lei apagada", 0, "law"); onClose() }
             Btn(if (active) "Revogar (⚡$cost)" else "Aprovar (⚡$cost)", Modifier.weight(1f), if (active) BtnKind.SECONDARY else BtnKind.PRIMARY) {
-                c.act(if (active) "Lei revogada" else "Lei aprovada") { if (c.sim.politics.toggleLaw(me, id)) null else c.sim.politics.canEnact(me, law) ?: "Não foi possível" }
+                c.act(if (active) "Lei revogada" else "Lei aprovada") { if (c.sim.politics.toggleLaw(me, id)) null else c.sim.politics.lastFail ?: c.sim.politics.canEnact(me, law) ?: "Não foi possível" }
                 onClose()
             }
         }
@@ -352,6 +354,7 @@ private fun ColumnScope.AiLawPane(c: GameController, onClose: () -> Unit) {
                     Cell("Seu capital", "⚡${me.politicalCapital.toInt()}")
                 }
             }
+            if (law != null) VoteForecast(c, law)
         }
         Spacer(Modifier.height(20.dp))
     }
@@ -363,7 +366,7 @@ private fun ColumnScope.AiLawPane(c: GameController, onClose: () -> Unit) {
         }
         Btn("Aprovar agora", Modifier.weight(1f), BtnKind.PRIMARY, Icons.Rounded.Gavel, enabled = ready && me.politicalCapital >= cost) {
             val cl = LawMaker.createFree(c.game, name.ifBlank { r!!.name }, analyzedText, r!!.law)
-            if (!c.sim.politics.toggleLaw(me, cl.id)) c.say("Capital político insuficiente; a lei ficou guardada", 2)
+            if (!c.sim.politics.toggleLaw(me, cl.id)) c.say((c.sim.politics.lastFail ?: "Capital político insuficiente") + "; a lei ficou guardada", 2)
             onClose()
         }
     }

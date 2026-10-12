@@ -238,6 +238,19 @@ class Nation(
     var drillUntil: Int = -1,
     var lastBombing: Int = -999,
     var lastMercs: Int = -999,
+
+    // corrida espacial
+    var satellites: Int = 0,
+    var satBuild: Int = 0,
+    /** 0 nada, 1 estação espacial, 2 missão à Lua */
+    var spaceStage: Int = 0,
+    var spaceBuild: Int = 0,
+
+    // pronunciamentos e câmbio
+    var lastSpeech: Int = -999,
+    /** índice da moeda (1 = normal; menor = desvalorizada) */
+    var currency: Float = 1f,
+    var lastIntervention: Int = -999,
 )
 
 @Serializable
@@ -353,6 +366,14 @@ class Game(
     var autoMerge: Boolean = true,
     /** onde chegam os reservistas do jogador (-1 = capital) */
     var rallyPoint: Int = -1,
+    // ---- expansão: congresso, insurgências, bloqueios, obras por província, corrida espacial
+    val parties: MutableList<Party> = mutableListOf(),
+    val insurgents: MutableList<Insurgency> = mutableListOf(),
+    var nextInsurgentId: Int = 1,
+    val blockades: MutableList<Blockade> = mutableListOf(),
+    val buildings: MutableList<ProvBuilding> = mutableListOf(),
+    var stationFirst: Int = -1,
+    var moonFirst: Int = -1,
     /** tropas no mapa: 0 todas, 1 só as minhas, 2 ocultas (batalhas continuam aparecendo) */
     var troopFilter: Int = 0,
     val ministers: MutableList<Minister> = mutableListOf(),
@@ -579,3 +600,41 @@ class ElectionResult(val day: Int, val myShare: Float, val won: Boolean, val opp
 
 @Serializable
 class Newspaper(val day: Int, val headline: String, val sub: String, val national: List<String>, val world: List<String>, val economy: List<String>)
+
+
+// ---------------------------------------------------------------- expansão
+
+enum class Ideology(val label: String, val color: Long, val weights: Map<Group, Float>) {
+    LEFT("Esquerda", 0xFFC0504DL, mapOf(Group.WORKERS to 1f, Group.YOUTH to 0.6f, Group.BUSINESS to -0.8f)),
+    GREEN("Verde", 0xFF6FA35AL, mapOf(Group.YOUTH to 1f, Group.BUSINESS to -0.3f, Group.WORKERS to 0.3f)),
+    CENTER("Centro", 0xFFD9B44AL, mapOf(Group.WORKERS to 0.3f, Group.BUSINESS to 0.3f, Group.RETIREES to 0.3f, Group.RELIGIOUS to 0.2f, Group.YOUTH to 0.2f, Group.MILITARY to 0.2f)),
+    RIGHT("Direita", 0xFF4A7AB5L, mapOf(Group.BUSINESS to 1f, Group.MILITARY to 0.4f, Group.WORKERS to -0.4f)),
+    RELIGIOUS("Conservador", 0xFF8C6BB1L, mapOf(Group.RELIGIOUS to 1f, Group.RETIREES to 0.5f, Group.YOUTH to -0.4f)),
+    NATIONALIST("Nacionalista", 0xFF6B5A3EL, mapOf(Group.MILITARY to 1f, Group.RETIREES to 0.3f, Group.YOUTH to -0.3f)),
+}
+
+@Serializable
+class Party(val id: Int, val name: String, val short: String, val ideology: Ideology, var seats: Int, var inCoalition: Boolean = false, var mood: Float = 55f)
+
+enum class InsurgentKind(val label: String, val icon: String) {
+    GUERRILLA("Guerrilha", "war"), TERROR("Grupo terrorista", "bomb"), MILITIA("Milícia", "siren"),
+}
+
+@Serializable
+class Insurgency(val id: Int, var province: Int, val nation: Int, val kind: InsurgentKind, val name: String, var strength: Float, val born: Int)
+
+@Serializable
+class Blockade(val by: Int, val target: Int, val start: Int)
+
+enum class BuildingType(val label: String, val icon: String, val baseCost: Double, val days: Int, val coastal: Boolean, val desc: String, val gdpBoost: Float) {
+    FACTORY("Parque industrial", "factory", 7.0, 180, false, "PIB do estado +8%; polui um pouco", 0.08f),
+    POWER("Usina de energia", "bolt", 9.0, 240, false, "PIB do estado +6% e infraestrutura", 0.06f),
+    PORT("Porto", "ship", 8.0, 180, true, "Comércio do país cresce; navios saem mais rápido daqui", 0.04f),
+    AIRPORT("Aeroporto", "plane2", 6.0, 150, false, "Turismo e negócios: PIB do estado +4%", 0.04f),
+    UNIVERSITY("Universidade", "school", 5.0, 200, false, "Educação e pesquisa do país sobem", 0.02f),
+    HOSPITAL("Hospital regional", "health", 4.0, 120, false, "Saúde do país sobe", 0f),
+    BASE("Base militar", "shield", 6.0, 150, false, "Defesa +25% neste estado; recrutar aqui custa menos", 0f),
+}
+
+@Serializable
+class ProvBuilding(val province: Int, val type: BuildingType, var daysLeft: Int)

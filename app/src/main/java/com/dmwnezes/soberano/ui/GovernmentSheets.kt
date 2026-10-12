@@ -48,12 +48,13 @@ fun GovernmentSheet(c: GameController) {
     val me = c.me
     val tab = c.subTab[Tab.GOVERNMENT] ?: 0
     Column(Modifier.fillMaxSize()) {
-        SheetHeaderTabs("${c.game.leaderTitle.label} de ${me.name}", me.regime.label, listOf("Visão geral", "Leis", "Ministros", "Regime"), tab) { c.subTab[Tab.GOVERNMENT] = it }
+        SheetHeaderTabs("${c.game.leaderTitle.label} de ${me.name}", me.regime.label, listOf("Visão geral", "Leis", "Congresso", "Ministros", "Regime"), tab) { c.subTab[Tab.GOVERNMENT] = it }
         Box(Modifier.weight(1f)) {
             when (tab) {
                 0 -> GovOverview(c)
                 1 -> GovLaws(c)
-                2 -> GovMinisters(c)
+                2 -> GovCongress(c)
+                3 -> GovMinisters(c)
                 else -> GovRegime(c)
             }
         }
@@ -91,6 +92,8 @@ private fun GovOverview(c: GameController) {
                 }
             }
         }
+        Spacer(Modifier.height(8.dp))
+        SpeechButton(c)
         CampaignPanel(c)
         Spacer(Modifier.height(10.dp))
         LineChart("Aprovação", g.history.map { it.approval }, "${me.approval.toInt()}%", Ink.good)
@@ -131,7 +134,7 @@ private fun GovLaws(c: GameController) {
             Row(
                 Modifier.fillMaxWidth().padding(vertical = 4.dp).clip(Shapes.tile)
                     .background(if (active) Ink.brass.copy(alpha = 0.13f) else Ink.raised)
-                    .clickable { c.act(if (active) "Lei revogada" else "Lei aprovada") { if (c.sim.politics.toggleLaw(me, law.id)) null else c.sim.politics.canEnact(me, law) ?: "Não foi possível" } }
+                    .clickable { c.act(if (active) "Lei revogada" else "Lei aprovada") { if (c.sim.politics.toggleLaw(me, law.id)) null else c.sim.politics.lastFail ?: c.sim.politics.canEnact(me, law) ?: "Não foi possível" } }
                     .padding(start = 14.dp, top = 12.dp, bottom = 12.dp, end = 6.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
@@ -484,6 +487,8 @@ private fun EconPolicy(c: GameController) {
         ActionRow(GameIcons.of("cut"), if (aus) "Encerrar austeridade" else "Austeridade",
             if (aus) "Até ${dateText(me.austerityUntil)}: gastos civis −15%" else "Gastos civis −15% por 1 ano; trabalhadores e aposentados reclamam",
             true, active = aus) { c.act(if (aus) "Austeridade encerrada" else "Austeridade em vigor") { pol.austerity(me) } }
+
+        CurrencySection(c)
 
         SectionTitle("Fundo soberano", trailing = { Text(Fmt.money(me.sovereignFund), style = Type.label, color = Ink.brass) })
         Text("Rende 5% ao ano. Serve de reserva para crises.", style = Type.small, color = Ink.muted)

@@ -93,7 +93,7 @@ class ScreensRenderTest {
         rule.runOnIdle { c.lawInfo = null; c.refresh() }
         rule.runOnIdle { repeat(70) { sim.advanceDay() }; sim.game.events.clear(); sim.game.proposals.clear() }
         for ((i, t) in Tab.entries.withIndex()) {
-            val subs = when (t) { Tab.DIPLOMACY -> 1; Tab.ECONOMY, Tab.MILITARY -> 5; else -> 4 }
+            val subs = when (t) { Tab.DIPLOMACY -> 1; Tab.ECONOMY, Tab.MILITARY, Tab.GOVERNMENT -> 5; else -> 4 }
             for (k in 0 until subs) {
                 rule.runOnIdle { c.selArmy = -1; c.selProvince = -1; c.tab = t; c.subTab[t] = k; c.refresh() }
                 shot("1${i}${k}_${t.name.lowercase()}")
@@ -222,6 +222,42 @@ class ScreensRenderTest {
         shot("65_lei_ia_resultado")
         rule.onNodeWithText("Salvar rascunho").performClick()
         rule.runOnIdle { org.junit.Assert.assertTrue(g.customLaws.any { it.free != null }) }
+    }
+
+    @Test fun newFeatures4() {
+        val sim = TestWorld.newSim("BRA", seed = 64)
+        val c = controller(sim)
+        val g = sim.game
+        val me = sim.player
+        rule.mainClock.autoAdvance = false
+        rule.setContent { SoberanoTheme { GameScreen(c, {}, {}, {}, SaveStore(Files.createTempDirectory("n4").toFile())) } }
+        rule.runOnIdle {
+            repeat(20) { sim.advanceDay() }
+            g.events.clear(); g.proposals.clear(); g.un.pending = null
+            val p = sim.provincesOf(me.id).first { sim.world.provinces[it].name == "Rio de Janeiro" }
+            g.insurgents += com.dmwnezes.soberano.sim.Insurgency(g.nextInsurgentId++, p, me.id, com.dmwnezes.soberano.sim.InsurgentKind.MILITIA, "Milícia de Rio de Janeiro", 3.2f, g.day)
+            me.treasury = 300.0
+            sim.buildings.build(me, p, com.dmwnezes.soberano.sim.BuildingType.PORT)
+            c.selectProvince(p)
+        }
+        shot("70_insurgencia_obras")
+        rule.runOnIdle { c.dialog = "build"; c.refresh() }
+        shot("71_construir")
+        rule.runOnIdle { c.dialog = null; c.selProvince = -1; c.mapMode = MapMode.TRADE; c.refresh() }
+        shot("72_mapa_comercio")
+        rule.runOnIdle {
+            c.mapMode = MapMode.POLITICAL
+            val ago = g.nations.first { it.code == "AGO" }
+            sim.diplomacy.declareWar(me.id, ago.id)
+            val a = sim.armiesOf(me.id).first { it.domain == com.dmwnezes.soberano.sim.Domain.LAND }
+            c.selArmy = a.id
+            c.chooseTarget(ago.capital)
+        }
+        shot("73_ataque_alem_mar")
+        rule.runOnIdle { c.clearTarget(); c.selArmy = -1; c.dialog = "speech"; c.refresh() }
+        shot("74_pronunciamento")
+        rule.onNodeWithText("Ir ao ar").performClick()
+        shot("75_pronunciamento_resultado")
     }
 
     @Test fun civilWarOnMap() {

@@ -207,6 +207,7 @@ private fun NationDetail(c: GameController, n: Nation) {
                     Text("${score.toInt()}", style = Type.number, color = if (score >= 0) Ink.good else Ink.coral)
                 }
                 Meter((score + 100) / 2, Modifier.fillMaxWidth().padding(vertical = 6.dp), if (score >= 0) Ink.good else Ink.coral)
+                BlockadeRow(c, n.id)
                 for (t in PeaceTerms.entries) {
                     val why = sim.diplomacy.peaceRefusal(war, me, t)
                     ActionRow(GameIcons.of("dove"), t.label, why ?: "Eles aceitam", why == null) { c.act("Paz assinada") { sim.diplomacy.proposePeace(war, me, t) } }

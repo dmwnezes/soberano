@@ -36,6 +36,7 @@ import com.dmwnezes.soberano.R
 import com.dmwnezes.soberano.sim.Army
 import com.dmwnezes.soberano.sim.Domain
 import com.dmwnezes.soberano.sim.Sim
+import com.dmwnezes.soberano.sim.TreatyType
 import com.dmwnezes.soberano.world.Projection
 import com.dmwnezes.soberano.world.WorldMap
 import java.util.concurrent.Executors
@@ -449,6 +450,59 @@ class MapRenderer(private val world: WorldMap, typeface: Typeface?) {
             c.drawRoundRect(RectF(x - bw / 2 + bw * b.attackerPower / tot, by, x + bw / 2, by + 4 * dp), 2 * dp, 2 * dp, marker)
         }
 
+        // rotas comerciais, canais e bloqueios (modo Comércio)
+        if (ui?.mapMode == MapMode.TRADE) {
+            for ((a, b, kind) in sim.trade.routes(me)) {
+                val pa = world.provinces[sim.nation(a).capital]; val pb = world.provinces[sim.nation(b).capital]
+                val x1 = sx(pa.cx); val y1 = sy(pa.cy); val x2 = sx(pb.cx); val y2 = sy(pb.cy)
+                val mx = (x1 + x2) / 2; val my = (y1 + y2) / 2 - kotlin.math.hypot(x2 - x1, y2 - y1) * 0.18f
+                val path = Path().apply { moveTo(x1, y1); quadTo(mx, my, x2, y2) }
+                val mineRoute = a == me || b == me
+                dash.strokeWidth = (if (mineRoute) 2f else 1.1f) * dp
+                dash.color = if (kind == 1) 0xCCF28C28.toInt() else if (mineRoute) 0xCC7FC8A9.toInt() else 0x557FC8A9
+                dash.pathEffect = DashPathEffect(floatArrayOf(5 * dp, 5 * dp), -(timeMs / 40f) % (10 * dp))
+                c.drawPath(path, dash)
+            }
+            for (cn in sim.trade.canals) {
+                val pr = world.provinces[cn.province]
+                val x = sx(pr.cx); val y = sy(pr.cy)
+                val closed = sim.trade.canalClosed(cn, me)
+                marker.style = Paint.Style.FILL; marker.color = 0xE61E2418.toInt()
+                c.drawCircle(x, y, 10f * dp, marker)
+                marker.style = Paint.Style.STROKE; marker.strokeWidth = 2.2f * dp
+                marker.color = if (closed) Ink.coral.toArgb() else 0xFF7FC8A9.toInt()
+                c.drawCircle(x, y, 10f * dp, marker)
+                // âncora simplificada
+                c.drawLine(x, y - 5 * dp, x, y + 5 * dp, marker)
+                c.drawLine(x - 4 * dp, y - 2 * dp, x + 4 * dp, y - 2 * dp, marker)
+                c.drawArc(RectF(x - 5 * dp, y - 1 * dp, x + 5 * dp, y + 6 * dp), 20f, 140f, false, marker)
+                if (s > 1.2f) { text.textSize = 9f * dp; text.color = Ink.text.toArgb(); c.drawText(cn.name, x + 13 * dp, y + 3 * dp, text) }
+            }
+        }
+        if (ui?.mapMode == MapMode.TRADE || ui?.mapMode == MapMode.WAR) for (b in g.blockades) {
+            val pr = world.provinces[sim.nation(b.target).capital]
+            val x = sx(pr.cx); val y = sy(pr.cy)
+            dash.strokeWidth = 2.4f * dp; dash.color = Ink.coral.toArgb()
+            dash.pathEffect = DashPathEffect(floatArrayOf(4 * dp, 4 * dp), (timeMs / 50f) % (8 * dp))
+            c.drawCircle(x, y, 26f * dp, dash)
+        }
+
+        // grupos armados (nos seus estados sempre; nos outros com zoom)
+        for (ins in g.insurgents) {
+            val ctrl = g.controller[ins.province]
+            if (ctrl != me && s < 2.2f) continue
+            val pr = world.provinces[ins.province]
+            if (pr.cx < view.left || pr.cx > view.right || pr.cy < view.top || pr.cy > view.bottom) continue
+            val x = sx(pr.cx) + 16f * dp; val y = sy(pr.cy) - 12f * dp
+            marker.style = Paint.Style.FILL; marker.color = 0xE61E2418.toInt()
+            c.drawCircle(x, y, 8f * dp, marker)
+            marker.color = Ink.coral.toArgb()
+            c.drawCircle(x, y, 6.5f * dp, marker)
+            text.textSize = 10f * dp; text.color = 0xFF1A0E0B.toInt()
+            val tw = text.measureText("!")
+            c.drawText("!", x - tw / 2, y + 3.5f * dp, text)
+        }
+
         // marcadores de tropas
         for ((a, r) in markerRects(sim, cam, dp)) {
             val owner = sim.nation(a.owner)
@@ -541,6 +595,13 @@ object MapColors {
                 MapMode.APPROVAL -> {
                     val a = n.approval
                     if (a < 50f) lerp(0xFFB5493A.toInt(), 0xFFC9A04F.toInt(), a / 50f) else lerp(0xFFC9A04F.toInt(), 0xFF7FA35A.toInt(), (a - 50f) / 50f)
+                }
+                MapMode.TRADE -> when {
+                    i == me -> Ink.brass.toArgb()
+                    sim.trade.blockaded(i) -> 0xFF8A3A2E.toInt()
+                    g.treaties.any { (it.type == TreatyType.SANCTION || it.type == TreatyType.EMBARGO) && ((it.a == me && it.b == i) || (it.a == i && it.b == me)) } -> Ink.coral.toArgb()
+                    sim.hasTreaty(TreatyType.TRADE, me, i) || g.deals.any { (it.seller == me && it.buyer == i) || (it.seller == i && it.buyer == me) } -> Ink.verdigris.toArgb()
+                    else -> DIM
                 }
                 MapMode.WEALTH -> {
                     val pc = g.natGdp(i) * 1e9 / max(1.0, g.natPop(i))

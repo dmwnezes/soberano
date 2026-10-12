@@ -131,16 +131,94 @@ class Military(private val sim: Sim) {
         if (a.battle) return "Em combate"
         if (!world.provinces[target].coastal) return "A província precisa ter litoral"
         if (!sim.canEnter(a.owner, target)) return "Sem acesso: precisa de guerra, aliança ou passagem"
-        if (transportCapacity(a.owner) < a.divisions()) return "Faltam transportes: cada um leva 4 divisões"
-        val path = seaPath(a.owner, a.province, target) ?: return "Nenhum porto amigo alcança essa praia"
+        val path = seaPath(a.owner, a.province, target) ?: invasionPath(a.owner, a.province, target) ?: return "Nenhum porto seu alcança essa praia"
+        payShipping(a)?.let { return it }
         setPath(a, path)
         sim.touch()
         return null
     }
 
+    /** Frete de navios civis quando faltam transportes (US$ bi). Zero se a frota dá conta. */
+    fun shippingCost(a: Army): Double {
+        val need = a.divisions() - transportCapacity(a.owner)
+        return if (need <= 0f) 0.0 else kotlin.math.ceil(need.toDouble()) * 0.4
+    }
+
+    private fun payShipping(a: Army): String? {
+        val cost = shippingCost(a)
+        if (cost <= 0.0) return null
+        val n = sim.nation(a.owner)
+        if (n.militaryFund + n.treasury < cost) return "Sem dinheiro para fretar navios (${Fmt.money(cost)})"
+        val fromFund = min(cost, max(0.0, n.militaryFund))
+        n.militaryFund -= fromFund; n.treasury -= cost - fromFund
+        return null
+    }
+
+    /** Distâncias por terra (só províncias onde [owner] pode entrar) a partir de [from]. */
+    private fun landDistances(owner: Int, from: Int): Pair<FloatArray, IntArray> {
+        val np = world.provinces.size
+        val dist = FloatArray(np) { Float.MAX_VALUE }
+        val prev = IntArray(np) { -1 }
+        val pq = PriorityQueue<Long>(compareBy { java.lang.Float.intBitsToFloat((it ushr 32).toInt()) })
+        fun push(d: Float, i: Int) = pq.add((java.lang.Float.floatToIntBits(d).toLong() shl 32) or i.toLong())
+        dist[from] = 0f; push(0f, from)
+        while (pq.isNotEmpty()) {
+            val e = pq.poll()
+            val d = java.lang.Float.intBitsToFloat((e ushr 32).toInt())
+            val u = (e and 0xffffffffL).toInt()
+            if (d > dist[u]) continue
+            val p = world.provinces[u]
+            for (k in p.neighbors.indices) {
+                val v = p.neighbors[k]
+                if (!sim.canEnter(owner, v) || sim.atWar(owner, game.controller[v])) continue
+                val nd = d + neighborKm[u][k]
+                if (nd < dist[v]) { dist[v] = nd; prev[v] = u; push(nd, v) }
+            }
+        }
+        return dist to prev
+    }
+
+    /**
+     * Invasão pelo mar sem limite de distância: marcha até o melhor porto próprio ou aliado,
+     * cruza o oceano até a praia mais perto do alvo e segue por terra até ele.
+     */
+    fun invasionPath(owner: Int, from: Int, target: Int, alsoEnter: Int = -1): IntArray? {
+        val enter = { p: Int -> sim.canEnter(owner, p) || (alsoEnter >= 0 && game.controller[p] == alsoEnter) }
+        if (!enter(target)) return null
+        // praias: o próprio alvo, ou litoral do mesmo dono perto dele
+        val tc = game.controller[target]
+        val beaches = if (world.provinces[target].coastal) listOf(target)
+        else world.coastalIds.filter { enter(it) && (game.controller[it] == tc) }.sortedBy { world.distanceKm(it, target) }.take(4)
+        if (beaches.isEmpty()) return null
+        val (dist, prev) = landDistances(owner, from)
+        var best: IntArray? = null; var bestCost = Float.MAX_VALUE
+        for (beach in beaches) {
+            val inland = if (beach == target) IntArray(0) else (landPath(owner, beach, target, false, alsoEnter) ?: continue)
+            var inlandKm = 0f; var pv = beach
+            for (q in inland) { inlandKm += legKm(pv, q); pv = q }
+            // porto: litoral alcançável por terra (ou onde o exército já está)
+            for (port in world.coastalIds) {
+                if (dist[port] == Float.MAX_VALUE || port == beach) continue
+                val c = game.controller[port]
+                if (c != owner && !sim.allied(owner, c)) continue
+                val cost = dist[port] + (world.distanceKm(port, beach) * 25.0 / SEA_SPEED).toFloat() + 60f + inlandKm
+                if (cost < bestCost) {
+                    bestCost = cost
+                    val land = ArrayList<Int>()
+                    var cur = port
+                    while (cur != from && cur != -1) { land += cur; cur = prev[cur] }
+                    land.reverse()
+                    best = (land + beach + inland.toList()).toIntArray()
+                }
+            }
+        }
+        return best
+    }
+
     fun previewSea(a: Army, target: Int): Pair<IntArray, Int>? {
         if (a.domain != Domain.LAND) return null
-        val path = seaPath(a.owner, a.province, target) ?: return null
+        val ctrl = game.controller[target]
+        val path = seaPath(a.owner, a.province, target) ?: invasionPath(a.owner, a.province, target, if (!sim.canEnter(a.owner, target)) ctrl else -1) ?: return null
         var days = 0.0; var prev = a.province
         for (q in path) {
             val sea = !isLandNeighbor(prev, q)
@@ -158,9 +236,9 @@ class Military(private val sim: Sim) {
                 if (!sim.canEnter(a.owner, target)) return "Sem acesso: precisa de guerra, aliança ou passagem"
                 var path = landPath(a.owner, a.province, target, false)
                 if (path == null) {
-                    path = landPath(a.owner, a.province, target, true)
-                    if (path == null) return "Sem caminho por terra ou mar"
-                    if (transportCapacity(a.owner) < a.divisions()) return "Faltam transportes para cruzar o mar"
+                    // além-mar: rota de invasão automática; sem transportes suficientes, frete de navios
+                    path = invasionPath(a.owner, a.province, target) ?: return "Sem caminho por terra ou mar"
+                    payShipping(a)?.let { return it }
                 }
                 setPath(a, path)
             }
@@ -193,7 +271,7 @@ class Military(private val sim: Sim) {
             Domain.LAND -> {
                 val ctrl = game.controller[target]
                 val extra = if (!sim.canEnter(a.owner, target)) ctrl else -1
-                landPath(a.owner, a.province, target, false, extra) ?: landPath(a.owner, a.province, target, true, extra) ?: return null
+                landPath(a.owner, a.province, target, false, extra) ?: invasionPath(a.owner, a.province, target, extra) ?: return null
             }
             Domain.SEA -> if (world.provinces[target].coastal) intArrayOf(target) else return null
             Domain.AIR -> intArrayOf(target)
@@ -258,7 +336,7 @@ class Military(private val sim: Sim) {
 
     private fun techMult(n: Int, d: Domain): Float {
         val b = when (d) { Domain.LAND -> TechBranch.LAND; Domain.SEA -> TechBranch.SEA; Domain.AIR -> TechBranch.AIR }
-        return (1f + 0.05f * sim.nation(n).tech[b.ordinal]) * sim.policy.combatMult(n)
+        return (1f + 0.05f * sim.nation(n).tech[b.ordinal]) * sim.policy.combatMult(n) * sim.space.combatMult(n)
     }
 
     fun dailyCombat() {
@@ -318,8 +396,9 @@ class Military(private val sim: Sim) {
         val attAttack = att.sumOf { groundAttack(it).toDouble() }.toFloat() * supAtt + airDmgAtt + navAtt
         // fortificação: quem defende a província fortificada bate mais e apanha menos
         val fortLvl = game.fort.getOrElse(p) { 0 }
-        val fortAtt = 1f + 0.15f * fortLvl
-        val fortDef = 1f - 0.15f * fortLvl
+        val baseMult = sim.buildings.defenseMult(p, defOwner)
+        val fortAtt = (1f + 0.15f * fortLvl) * baseMult
+        val fortDef = (1f - 0.15f * fortLvl) / baseMult
         val dmgToAtt = defAttack * 1.2f * fortAtt * DAMAGE_SCALE * (0.85f + sim.randf() * 0.3f)
         val dmgToDef = attAttack * fortDef * DAMAGE_SCALE * (0.85f + sim.randf() * 0.3f)
 
