@@ -23,6 +23,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.rounded.SystemUpdate
 import androidx.compose.material.icons.rounded.Add
 import androidx.compose.material.icons.rounded.FolderOpen
 import androidx.compose.material.icons.rounded.PlayArrow
@@ -98,7 +99,9 @@ fun HomeScreen(preview: Sim, store: SaveStore, onNew: () -> Unit, onLoad: (Strin
                 Btn("Carregar", Modifier.weight(1f), BtnKind.SECONDARY, Icons.Rounded.FolderOpen) { showSlots = true }
             }
             Spacer(Modifier.height(12.dp))
-            com.dmwnezes.soberano.update.UpdatePill(Modifier.align(Alignment.CenterHorizontally)) { showUpdate = true }
+            if (com.dmwnezes.soberano.update.UpdateState.available != null)
+                com.dmwnezes.soberano.update.UpdatePill(Modifier.align(Alignment.CenterHorizontally)) { showUpdate = true }
+            else Btn("Buscar atualização", Modifier.fillMaxWidth(), BtnKind.GHOST, Icons.Rounded.SystemUpdate) { showUpdate = true }
             Spacer(Modifier.height(10.dp))
             Row(Modifier.align(Alignment.CenterHorizontally), verticalAlignment = Alignment.CenterVertically) {
             Text(

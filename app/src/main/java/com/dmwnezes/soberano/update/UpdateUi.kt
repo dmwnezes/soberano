@@ -100,7 +100,7 @@ fun UpdateDialog(onDismiss: () -> Unit) {
         job = scope.launch {
             runCatching { Updater.latest() }.fold(
                 { r -> if (Updater.isNewer(r)) { release = r; UpdateState.available = r; status = "" } else status = "Você já está na versão mais nova" },
-                { status = "Não consegui verificar. Confira a internet." },
+                { e -> status = "Não consegui verificar. " + (e.message?.takeIf { it.startsWith("O GitHub") } ?: "Confira a internet.") },
             )
         }
     }
@@ -109,13 +109,22 @@ fun UpdateDialog(onDismiss: () -> Unit) {
         job = scope.launch {
             runCatching { Updater.download(ctx, r) { progress = it } }.fold(
                 { f -> file = f; UpdateState.downloaded = f; status = ""; progress = -1f },
-                { status = "O download falhou. Tente de novo."; progress = -1f },
+                { e -> status = "O download falhou. " + (e.message ?: "Tente de novo."); progress = -1f },
             )
         }
     }
     LaunchedEffect(Unit) { if (release == null) check() }
+    // ao voltar da tela "instalar apps desconhecidos", a permissão é relida
+    var canInstall by remember { mutableStateOf(Updater.canInstall(ctx)) }
+    val owner = androidx.lifecycle.compose.LocalLifecycleOwner.current
+    androidx.compose.runtime.DisposableEffect(owner) {
+        val obs = androidx.lifecycle.LifecycleEventObserver { _, ev -> if (ev == androidx.lifecycle.Lifecycle.Event.ON_RESUME) canInstall = Updater.canInstall(ctx) }
+        owner.lifecycle.addObserver(obs)
+        onDispose { owner.lifecycle.removeObserver(obs) }
+    }
 
-    Overlay({ job?.cancel(); onDismiss() }) {
+    // durante o download, tocar fora não cancela
+    Overlay({ job?.cancel(); onDismiss() }, dismissable = progress < 0f) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Icon(Icons.Rounded.SystemUpdate, null, tint = Ink.brass, modifier = Modifier.size(28.dp))
             Spacer(Modifier.width(10.dp))
@@ -139,11 +148,14 @@ fun UpdateDialog(onDismiss: () -> Unit) {
         val f = file
         when {
             f != null -> {
-                if (!Updater.canInstall(ctx)) Text("Na primeira vez o Android pede para permitir que o Soberano instale atualizações. Permita e volte aqui.",
+                if (!canInstall) Text("Na primeira vez o Android pede para permitir que o Soberano instale atualizações. Permita e volte aqui.",
                     style = Type.small, color = Ink.muted, modifier = Modifier.padding(bottom = 8.dp))
-                Btn("Instalar", Modifier.fillMaxWidth(), BtnKind.PRIMARY, Icons.Rounded.SystemUpdate) { Updater.install(ctx, f) }
+                Btn(if (canInstall) "Instalar" else "Permitir instalação", Modifier.fillMaxWidth(), BtnKind.PRIMARY, Icons.Rounded.SystemUpdate) {
+                    if (!f.exists()) { file = null; UpdateState.downloaded = null; status = "O arquivo sumiu. Baixe de novo." }
+                    else runCatching { Updater.install(ctx, f) }.onFailure { status = "Não consegui abrir o instalador." }
+                }
             }
-            r != null && progress < 0f -> Btn("Baixar (${r.sizeBytes / 1_048_576} MB)", Modifier.fillMaxWidth(), BtnKind.PRIMARY, Icons.Rounded.Download) { download(r) }
+            r != null && progress < 0f -> Btn(if (status.startsWith("O download")) "Tentar de novo" else "Baixar (${r.sizeBytes / 1_048_576} MB)", Modifier.fillMaxWidth(), BtnKind.PRIMARY, Icons.Rounded.Download) { download(r) }
             r == null && status.startsWith("Não") -> Btn("Tentar de novo", Modifier.fillMaxWidth()) { check() }
         }
         Spacer(Modifier.height(8.dp))

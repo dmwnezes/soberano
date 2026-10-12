@@ -50,7 +50,12 @@ object Updater {
             connectTimeout = 10_000; readTimeout = 15_000
         }
         try {
-            if (c.responseCode != 200) error("GitHub respondeu ${c.responseCode}")
+            when (c.responseCode) {
+                200 -> {}
+                404 -> error("O GitHub não mostra as versões: o repositório está privado")
+                403 -> error("O GitHub limitou as consultas. Tente daqui a uma hora")
+                else -> error("GitHub respondeu ${c.responseCode}")
+            }
             val o = JSONObject(c.inputStream.bufferedReader().readText())
             val assets = o.getJSONArray("assets")
             val apk = (0 until assets.length()).map { assets.getJSONObject(it) }
@@ -75,8 +80,12 @@ object Updater {
                 connectTimeout = 15_000; readTimeout = 60_000
             }
             val code = conn.responseCode
-            if (code in 300..399 && hops++ < 5) { url = conn.getHeaderField("Location"); conn.disconnect(); continue }
-            if (code != 200) error("Download falhou ($code)")
+            if (code in 300..399 && hops++ < 5) {
+                val loc = conn.getHeaderField("Location") ?: error("Redirecionamento sem destino")
+                url = URL(URL(url), loc).toString(); conn.disconnect(); continue
+            }
+            if (code == 404) error("Arquivo indisponível: o repositório está privado")
+            if (code != 200) error("Download falhou (código $code)")
             break
         }
         try {
@@ -95,7 +104,10 @@ object Updater {
                     }
                 }
             }
+        } catch (e: Exception) {
+            file.delete(); throw e
         } finally { conn.disconnect() }
+        if (r.sizeBytes > 0 && file.length() != r.sizeBytes) { file.delete(); error("Download incompleto. Tente de novo") }
         file
     }
 
