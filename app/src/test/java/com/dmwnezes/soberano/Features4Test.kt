@@ -167,4 +167,21 @@ class Features4Test {
         repeat(BuildingType.BASE.days) { sim.buildings.daily() }
         assertEquals(1.25f, sim.buildings.defenseMult(p, me.id), 0.001f)
     }
+
+    @Test fun autoDecideClearsBlockingCards() {
+        val sim = TestWorld.newSim("BRA", seed = 89)
+        val g = sim.game
+        g.events += com.dmwnezes.soberano.sim.PendingEvent("greve", g.day)
+        sim.events.autoResolve(g.events.first())
+        assertTrue(g.events.isEmpty())
+        val c = com.dmwnezes.soberano.ui.GameController(sim, com.dmwnezes.soberano.data.SaveStore(java.nio.file.Files.createTempDirectory("ad").toFile()), kotlinx.coroutines.MainScope())
+        g.autoDecide = true
+        g.events += com.dmwnezes.soberano.sim.PendingEvent("greve", g.day)
+        sim.unitedNations.open(com.dmwnezes.soberano.sim.Resolution(com.dmwnezes.soberano.sim.ResolutionType.CLIMATE, -1, -1, g.nations.first { it.code == "USA" }.id, g.day))
+        c.paused = false
+        c.onFrame(0.016, System.currentTimeMillis())
+        assertTrue(g.events.isEmpty())
+        assertNull(g.un.pending)
+        assertFalse(c.blocked)
+    }
 }

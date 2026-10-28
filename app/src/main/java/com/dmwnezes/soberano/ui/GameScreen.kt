@@ -833,6 +833,7 @@ private fun SettingsOverlay(c: GameController, store: SaveStore, onExit: () -> U
             Btn("Ler o último jornal", Modifier.fillMaxWidth(), icon = Icons.Rounded.Newspaper) { c.showSettings = false; c.showPaper = true }
         }
         Spacer(Modifier.height(4.dp))
+        ToggleRow("Não parar o tempo", c.game.autoDecide, Icons.Rounded.FastForward, "Eventos e votações da ONU se decidem sozinhos") { c.game.autoDecide = it; c.refresh() }
         SoundToggles(c)
         Spacer(Modifier.height(8.dp))
         Btn("Sair para o menu", Modifier.fillMaxWidth(), BtnKind.GHOST, Icons.Rounded.Logout) { c.showSettings = false; onExit() }

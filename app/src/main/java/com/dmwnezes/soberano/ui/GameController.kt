@@ -102,6 +102,7 @@ class GameController(val sim: Sim, private val store: SaveStore, private val sco
         val vote = game.un.pending != null
         if (vote && !hadVote) feedback?.play(Sfx.VOTE)
         hadVote = vote
+        if (game.autoDecide && !paused) autoDecide()
         if (paused || blocked) { acc = 0.0; return }
         // enquanto o jogo é gravado em segundo plano, o tempo espera (a tela continua fluida)
         if (saving) { acc = 0.0; return }
@@ -122,6 +123,21 @@ class GameController(val sim: Sim, private val store: SaveStore, private val sco
         // redesenha a interface no máximo ~10 vezes por segundo (economiza bateria em velocidade alta)
         if (days > 0 && nowMs - lastTickMs >= 100) { tick++; lastTickMs = nowMs }
         if (blocked) { paused = true; tick++ }
+    }
+
+    /** Modo sem interrupções: decide eventos e votos sozinho e só avisa. */
+    private fun autoDecide() {
+        game.events.firstOrNull()?.let { pe ->
+            val title = com.dmwnezes.soberano.sim.Content.eventById[pe.def]?.title ?: "Evento"
+            sim.events.autoResolve(pe)
+            say("$title: decidido automaticamente", 0, "law")
+        }
+        game.un.pending?.let { r ->
+            val v = sim.unitedNations.vote(me, r)
+            sim.unitedNations.resolve(v)
+            say("ONU: você votou " + when (v) { 1 -> "sim"; -1 -> "não"; else -> "abstenção" } + " (automático)", 0, "bloc")
+        }
+        game.election?.let { if (!it.seen) it.seen = true }
     }
 
     fun togglePause() { paused = !paused; tick++ }

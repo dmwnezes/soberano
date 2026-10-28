@@ -84,6 +84,13 @@ class Events(private val sim: Sim) {
         sim.touch()
     }
 
+    /** Resolve sozinho com a opção que parece melhor (a mesma regra do computador). */
+    fun autoResolve(pe: PendingEvent) {
+        val def = Content.eventById[pe.def] ?: run { game.events.remove(pe); return }
+        val best = def.choices.indices.maxByOrNull { i -> def.choices[i].effects.sumOf { score(it).toDouble() } } ?: 0
+        resolve(pe, best)
+    }
+
     fun score(e: Effect): Float {
         val v = e.value
         return when {

@@ -376,6 +376,8 @@ class Game(
     var moonFirst: Int = -1,
     /** tropas no mapa: 0 todas, 1 só as minhas, 2 ocultas (batalhas continuam aparecendo) */
     var troopFilter: Int = 0,
+    /** eventos, votações da ONU e resultado de eleição se resolvem sozinhos, sem parar o tempo */
+    var autoDecide: Boolean = false,
     val ministers: MutableList<Minister> = mutableListOf(),
     val candidates: MutableList<Minister> = mutableListOf(),
     val history: MutableList<HistoryPoint> = mutableListOf(),
