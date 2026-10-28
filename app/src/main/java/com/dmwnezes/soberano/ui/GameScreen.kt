@@ -231,13 +231,13 @@ fun GameScreen(
         if (warTarget >= 0) {
             val enemy = c.sim.nation(warTarget)
             val army = selArmy
-            val allies = game.nations.filter { it.alive && it.id != enemy.id && it.id != game.player && c.sim.allied(it.id, enemy.id) && !c.sim.allied(it.id, game.player) }
+            val resp = remember(warTarget) { c.sim.diplomacy.allyResponse(game.player, enemy.id) }
             Overlay({ warTarget = -1 }) {
                 Icon(Icons.Rounded.Whatshot, null, tint = Ink.coral, modifier = Modifier.size(40.dp).align(Alignment.CenterHorizontally))
                 Text("Declarar guerra a ${enemy.name}?", style = Type.title.copy(fontSize = 22.sp), color = Ink.text, textAlign = TextAlign.Center, modifier = Modifier.fillMaxWidth())
                 Spacer(Modifier.height(8.dp))
                 Text(
-                    (if (allies.isEmpty()) "Ninguém deve entrar na guerra ao lado deles." else "Podem entrar ao lado deles: ${allies.take(5).joinToString { it.name }}${if (allies.size > 5) " e mais ${allies.size - 5}" else ""}.") +
+                    allyText(c, resp) +
                         if (c.sim.hasTreaty(TreatyType.NON_AGGRESSION, game.player, enemy.id)) " Você vai quebrar um pacto de não agressão." else "",
                     style = Type.body, color = Ink.muted, textAlign = TextAlign.Center, modifier = Modifier.fillMaxWidth(),
                 )
@@ -703,30 +703,6 @@ private fun OrderCard(c: GameController, a: Army, p: Int, onDeclare: (Int) -> Un
                     style = Type.small, color = Ink.verdigris)
             }
         }
-        // desembarque numa praia escolhida
-        val sea = remember(a.id, p, c.tick) { if (a.domain == Domain.LAND && pr.coastal && !neutral && !viaSea) sim.military.previewSea(a, p) else null }
-        if (sea != null) {
-            val freight = sim.military.shippingCost(a)
-            val ok = c.me.militaryFund + c.me.treasury >= freight
-            Row(
-                Modifier.fillMaxWidth().padding(top = 8.dp).clip(Shapes.tile).background(Ink.oceanDeep)
-                    .clickable(enabled = ok) {
-                        val why = sim.military.orderBySea(a, p)
-                        if (why != null) c.say(why, 2) else c.say("${a.name} vai desembarcar em ${pr.name}", 0, "ship")
-                        c.clearTarget()
-                    }.padding(10.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Icon(Icons.Rounded.DirectionsBoat, null, tint = if (ok) Ink.verdigris else Ink.faint, modifier = Modifier.size(20.dp))
-                Spacer(Modifier.width(10.dp))
-                Column(Modifier.weight(1f)) {
-                    Text("Desembarcar pelo mar", style = Type.label.copy(fontWeight = FontWeight.SemiBold), color = if (ok) Ink.text else Ink.faint)
-                    Text(if (ok) "${sea.second} dias, saindo de ${sim.world.provinces[if (sea.first.size > 1) sea.first[sea.first.size - 2] else a.province].name}"
-                        .plus(if (freight > 0) " · frete ${Fmt.money(freight)}" else "")
-                        else "Frete de ${Fmt.money(freight)}: falta dinheiro", style = Type.small, color = Ink.muted)
-                }
-            }
-        }
         Spacer(Modifier.height(12.dp))
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             Btn("Cancelar", Modifier.weight(1f), BtnKind.GHOST) { c.clearTarget() }
@@ -737,8 +713,10 @@ private fun OrderCard(c: GameController, a: Army, p: Int, onDeclare: (Int) -> Un
             }
             when {
                 a.domain == Domain.AIR -> Btn("Mudar base", Modifier.weight(1.4f), BtnKind.PRIMARY, Icons.Rounded.Flight, enabled = friendly) { go("muda para") }
-                atWar || enemyArmies -> Btn("Atacar", Modifier.weight(1.4f), BtnKind.DANGER, Icons.Rounded.Whatshot, enabled = !noRoute) { go("ataca") }
-                neutral -> Btn("Declarar guerra e atacar", Modifier.weight(1.6f), BtnKind.DANGER, Icons.Rounded.Whatshot, enabled = !noRoute) { onDeclare(ctrl) }
+                atWar || enemyArmies -> Btn(if (viaSea) "Invadir" else "Atacar", Modifier.weight(1.4f), BtnKind.DANGER,
+                    if (viaSea) Icons.Rounded.DirectionsBoat else Icons.Rounded.Whatshot, enabled = !noRoute) { go(if (viaSea) "invade" else "ataca") }
+                neutral -> Btn(if (viaSea) "Declarar guerra e invadir" else "Declarar guerra e atacar", Modifier.weight(1.6f), BtnKind.DANGER,
+                    if (viaSea) Icons.Rounded.DirectionsBoat else Icons.Rounded.Whatshot, enabled = !noRoute) { onDeclare(ctrl) }
                 else -> Btn(if (a.domain == Domain.SEA) "Navegar" else "Mover para cá", Modifier.weight(1.4f), BtnKind.PRIMARY, Icons.Rounded.Flag, enabled = !noRoute) { go("vai para") }
             }
         }
@@ -881,4 +859,14 @@ private fun SettingsOverlay(c: GameController, store: SaveStore, onExit: () -> U
             }
         }
     }
+}
+
+/** Texto da previsão: quem luta, quem só ajuda, quem sanciona. */
+fun allyText(c: GameController, r: com.dmwnezes.soberano.sim.Diplomacy.AllyResponse): String {
+    fun names(l: List<Int>) = l.take(4).joinToString { c.sim.nation(it).name } + if (l.size > 4) " e mais ${l.size - 4}" else ""
+    val parts = ArrayList<String>()
+    parts += if (r.fight.isEmpty()) "Nenhum aliado deles deve lutar." else "Devem lutar: ${names(r.fight)}."
+    if (r.aid.isNotEmpty()) parts += "${r.aid.size} só mandam dinheiro."
+    if (r.sanction.isNotEmpty()) parts += "${r.sanction.size} vão sancionar você."
+    return parts.joinToString(" ")
 }

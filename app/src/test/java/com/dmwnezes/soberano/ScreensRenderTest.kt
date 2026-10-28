@@ -260,6 +260,25 @@ class ScreensRenderTest {
         shot("75_pronunciamento_resultado")
     }
 
+    @Test fun troopMarkersStayReadable() {
+        val sim = TestWorld.newSim("BRA", seed = 65)
+        repeat(300) { sim.advanceDay(); sim.game.events.clear(); sim.game.un.pending = null; sim.game.election?.seen = true }
+        sim.game.troopFilter = 0
+        val r = com.dmwnezes.soberano.ui.MapRenderer(sim.world, null)
+        val dp = 3f
+        for (scale in listOf(0.3f, 1f, 2.5f, 6f)) {
+            val cam = com.dmwnezes.soberano.ui.MapCamera().apply { viewW = 1236f; viewH = 2745f; this.scale = scale; worldW = sim.world.width; worldH = sim.world.height }
+            // centraliza no Brasil
+            val cap = sim.world.provinces[sim.player.capital]
+            cam.ox = cam.viewW / 2 - cap.cx * scale; cam.oy = cam.viewH / 2 - cap.cy * scale
+            val ms = r.markers(sim, cam, dp)
+            val visible = com.dmwnezes.soberano.ui.visibleArmiesAt(sim, scale).size
+            println("MARK scale=$scale markers=${ms.size} armies=$visible compact=${ms.count { it.compact }}")
+            org.junit.Assert.assertTrue("poucos selos na tela (escala $scale): ${ms.size}", ms.size <= 45)
+            if (scale < 1.5f) org.junit.Assert.assertTrue(ms.all { it.compact })
+        }
+    }
+
     @Test fun civilWarOnMap() {
         val sim = TestWorld.newSim("BRA", seed = 62)
         val c = controller(sim)

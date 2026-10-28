@@ -137,24 +137,47 @@ class MapRenderer(private val world: WorldMap, typeface: Typeface?) {
     var stripes = IntArray(world.provinces.size)
     private var labelX = FloatArray(0); private var labelY = FloatArray(0); private var labelA = FloatArray(0)
 
+    // pedido mais recente de redesenho (o trabalhador pega sempre o último e ignora os intermediários)
+    private val wanted = java.util.concurrent.atomic.AtomicReference<Triple<Long, IntArray, IntArray>?>(null)
+    @Volatile private var working = false
+    /** duas telas reaproveitadas: antes cada redesenho criava um bitmap novo de ~18 MB e o coletor de lixo travava o jogo */
+    private var spare: Bitmap? = null
+
     fun ensureCache(key: Long, fills: IntArray, stripeColors: IntArray, sim: Sim) {
         colors = fills; stripes = stripeColors
         if (key == cacheKey || key == pendingKey) return
         pendingKey = key
         ownedCache.clear()
         computeLabels(sim)
-        val f = fills.copyOf(); val s = stripeColors.copyOf()
+        wanted.set(Triple(key, fills.copyOf(), stripeColors.copyOf()))
+        kick()
+    }
+
+    private fun kick() {
+        if (working) return
+        working = true
         executor.execute {
-            val h = (CACHE_W * world.height / world.width).toInt()
-            val bmp = Bitmap.createBitmap(CACHE_W, h, Bitmap.Config.ARGB_8888)
-            val c = ACanvas(bmp)
-            val k = CACHE_W / world.width
-            c.scale(k, k)
-            // pincéis próprios: a thread da interface usa os outros ao mesmo tempo
-            drawProvinces(c, 0 until paths.size, f, s, 0.7f / k, null, Paints())
-            cache = bmp
-            cacheKey = key
-            onCacheReady?.invoke()
+            try {
+                while (true) {
+                    val job = wanted.getAndSet(null) ?: break
+                    val h = (CACHE_W * world.height / world.width).toInt()
+                    val bmp = spare?.takeIf { it.width == CACHE_W && it.height == h } ?: Bitmap.createBitmap(CACHE_W, h, Bitmap.Config.ARGB_8888)
+                    bmp.eraseColor(0)
+                    val c = ACanvas(bmp)
+                    val k = CACHE_W / world.width
+                    c.scale(k, k)
+                    // pincéis próprios: a thread da interface usa os outros ao mesmo tempo
+                    drawProvinces(c, 0 until paths.size, job.second, job.third, 0.7f / k, null, Paints())
+                    spare = cache
+                    cache = bmp
+                    cacheKey = job.first
+                    onCacheReady?.invoke()
+                    // no máximo ~1 redesenho por segundo, mesmo com muitas guerras mudando fronteiras
+                    Thread.sleep(900)
+                }
+            } finally { working = false }
+            // um pedido pode ter chegado entre o fim do laço e o "working = false"
+            if (wanted.get() != null) kick()
         }
     }
 
@@ -321,25 +344,63 @@ class MapRenderer(private val world: WorldMap, typeface: Typeface?) {
     /** Quais exércitos aparecem: do jogador, aliados, inimigos e, com zoom, todos. */
     fun visibleArmies(sim: Sim, cam: MapCamera): List<Army> = visibleArmiesAt(sim, cam.scale)
 
-    fun markerRects(sim: Sim, cam: MapCamera, dp: Float): List<Pair<Army, RectF>> {
-        val out = ArrayList<Pair<Army, RectF>>()
-        val groups = LinkedHashMap<Int, MutableList<Army>>()
-        for (a in visibleArmies(sim, cam)) groups.getOrPut(if (a.moving) -a.id else a.province) { mutableListOf() } += a
-        val w = 34f * dp; val h = 20f * dp; val gap = 3f * dp
-        for (list in groups.values) {
-            val pos = armyPos(list[0], sim)
-            val x = pos.x * cam.scale + cam.ox; val y = pos.y * cam.scale + cam.oy
+    /** Um marcador no mapa: várias tropas próximas do mesmo país viram um só. */
+    class Marker(val army: Army, val total: Float, val count: Int, val rect: RectF, val compact: Boolean)
+
+    /**
+     * Agrupa as tropas para não encher a tela de números:
+     * longe (mapa-múndi) cada país vira uma bolinha por região, sem número; perto, um selo com o total por estado.
+     */
+    fun markers(sim: Sim, cam: MapCamera, dp: Float, selected: Int = -1): List<Marker> {
+        val s = cam.scale
+        val me = sim.game.player
+        val far = s < 1.5f
+        val cell = (if (far) 46f else if (s < 3.5f) 30f else 0f) * dp
+        class G(val key: Long, val spot: Long) { val list = ArrayList<Army>(); var x = 0f; var y = 0f; var best = 0f }
+        val groups = LinkedHashMap<Long, G>()
+        for (a in visibleArmiesAt(sim, s)) {
+            if (far && a.domain != Domain.LAND && a.owner != me) continue
+            val pos = armyPos(a, sim)
+            val x = pos.x * s + cam.ox; val y = pos.y * s + cam.oy
             if (x < -80 || x > cam.viewW + 80 || y < -80 || y > cam.viewH + 80) continue
-            val cols = min(3, list.size)
-            list.forEachIndexed { k, a ->
-                val col = k % 3; val row = k / 3
-                val left = x - (cols * w + (cols - 1) * gap) / 2 + col * (w + gap)
-                val top = y - h - 7f * dp - row * (h + gap)
-                out += a to RectF(left, top, left + w, top + h)
+            val dom = if (far) 0L else a.domain.ordinal.toLong()
+            val spot = when {
+                a.moving && a.owner == me -> -(a.id.toLong() + 1)
+                cell > 0f -> ((x / cell).toLong() shl 20) or ((y / cell).toLong() and 0xFFFFF)
+                else -> a.province.toLong()
+            }
+            val key = if (spot < 0) spot else (spot shl 16) xor (a.owner.toLong() shl 2) xor dom
+            val g = groups.getOrPut(key) { G(key, spot) }
+            g.list += a
+            val t = a.total()
+            if (t > g.best || a.id == selected) { if (g.list.none { it.id == selected } || a.id == selected) { g.best = t; g.x = x; g.y = y } }
+        }
+        // no máximo 3 selos por lugar: os seus primeiro, depois inimigos, depois o resto
+        val out = ArrayList<Marker>()
+        val w = 34f * dp; val h = 20f * dp; val gap = 3f * dp; val r = 7f * dp
+        for (spotGroups in groups.values.groupBy { it.spot }.values) {
+            val sorted = spotGroups.sortedWith(compareBy<G>({ if (it.list[0].owner == me) 0 else if (sim.atWar(me, it.list[0].owner)) 1 else 2 }, { -it.list.sumOf { a -> a.total().toDouble() } })).take(3)
+            val n = sorted.size
+            sorted.forEachIndexed { k, g ->
+                val rep = g.list.firstOrNull { it.id == selected } ?: g.list.maxBy { it.total() }
+                val total = g.list.sumOf { it.total().toDouble() }.toFloat()
+                val compact = far && rep.id != selected
+                val cx = sorted[0].x; val cy = sorted[0].y
+                val rect = if (compact) {
+                    val left = cx - (n * 2 * r + (n - 1) * gap) / 2 + k * (2 * r + gap)
+                    RectF(left, cy - 2 * r - 4 * dp, left + 2 * r, cy - 4 * dp)
+                } else {
+                    val left = cx - (n * w + (n - 1) * gap) / 2 + k * (w + gap)
+                    RectF(left, cy - h - 7f * dp, left + w, cy - 7f * dp)
+                }
+                out += Marker(rep, total, g.list.size, rect, compact)
             }
         }
         return out
     }
+
+    fun markerRects(sim: Sim, cam: MapCamera, dp: Float, selected: Int = -1): List<Pair<Army, RectF>> =
+        markers(sim, cam, dp, selected).map { it.army to it.rect }
 
     private fun overlays(c: ACanvas, cam: MapCamera, sim: Sim, ui: GameController?, dp: Float, timeMs: Long, view: RectF) {
         val g = sim.game
@@ -504,10 +565,20 @@ class MapRenderer(private val world: WorldMap, typeface: Typeface?) {
         }
 
         // marcadores de tropas
-        for ((a, r) in markerRects(sim, cam, dp)) {
+        for (m in markers(sim, cam, dp, ui?.selArmy ?: -1)) {
+            val a = m.army; val r = m.rect
             val owner = sim.nation(a.owner)
             val selected = ui?.selArmy == a.id
             val enemy = sim.atWar(me, a.owner)
+            val ring = when { selected -> 0xFFFFFFFF.toInt(); a.owner == me -> Ink.brass.toArgb(); enemy -> Ink.coral.toArgb(); else -> 0xFF1E2418.toInt() }
+            if (m.compact) {
+                // longe: bolinha na cor do país, sem número
+                marker.style = Paint.Style.FILL; marker.color = owner.mapColor.toInt()
+                c.drawCircle(r.centerX(), r.centerY(), r.width() / 2, marker)
+                marker.style = Paint.Style.STROKE; marker.strokeWidth = 1.8f * dp; marker.color = ring
+                c.drawCircle(r.centerX(), r.centerY(), r.width() / 2, marker)
+                continue
+            }
             marker.style = Paint.Style.FILL
             marker.color = 0xE61E2418.toInt()
             c.drawRoundRect(r, 7 * dp, 7 * dp, marker)
@@ -517,13 +588,14 @@ class MapRenderer(private val world: WorldMap, typeface: Typeface?) {
             c.drawRect(RectF(r.left + 6 * dp, r.top, r.left + 12 * dp, r.bottom), marker)
             // ícone do ramo
             glyph(c, a.domain, r.left + 6 * dp, r.centerY(), dp)
-            // número
+            // total do grupo, arredondado
             text.textSize = 11.5f * dp; text.color = Ink.text.toArgb(); text.letterSpacing = 0f
-            val num = a.total().let { if (it >= 100) it.toInt().toString() else com.dmwnezes.soberano.sim.Fmt.units((it * 2).toInt() / 2f) }
+            val t = m.total
+            val num = when { t >= 1000 -> "${(t / 1000).toInt()}k"; t >= 10 -> t.toInt().toString(); else -> com.dmwnezes.soberano.sim.Fmt.units((t * 2).toInt() / 2f) }
             c.drawText(num, r.left + 12 * dp + (r.width() - 12 * dp) / 2, r.centerY() + 4 * dp, text)
             // borda
             marker.style = Paint.Style.STROKE; marker.strokeWidth = (if (selected) 2.4f else 1.3f) * dp
-            marker.color = when { selected -> 0xFFFFFFFF.toInt(); a.owner == me -> Ink.brass.toArgb(); enemy -> Ink.coral.toArgb(); else -> Ink.line.toArgb() }
+            marker.color = if (ring == 0xFF1E2418.toInt()) Ink.line.toArgb() else ring
             c.drawRoundRect(r, 7 * dp, 7 * dp, marker)
             if (a.morale < 0.5f) {
                 marker.style = Paint.Style.FILL; marker.color = Ink.coral.toArgb()
@@ -628,7 +700,7 @@ object MapColors {
         if (mode != MapMode.POLITICAL) {
             h = (h xor (g.day / 30).toLong()) * 1099511628211L
             h = (h xor g.wars.size.toLong()) * 1099511628211L
-            h = (h xor (g.treatyCache?.hashCode()?.toLong() ?: 0L)) * 1099511628211L
+            h = (h xor g.treaties.size.toLong() / 8) * 1099511628211L
         }
         for (n in g.nations) h = (h xor n.mapColor) * 1099511628211L
         return h
@@ -686,7 +758,8 @@ fun WorldMapView(
                 detectTapGestures(
                     onDoubleTap = { o -> camera.zoomAt(o, 2f); camera.clamp() },
                     onTap = { o ->
-                        val hit = renderer.markerRects(sim, camera, density).lastOrNull { it.second.contains(o.x, o.y) }
+                        val hit = renderer.markerRects(sim, camera, density, controller?.selArmy ?: -1)
+                            .lastOrNull { RectF(it.second).apply { inset(-6f * density, -6f * density) }.contains(o.x, o.y) }
                         if (hit != null) { tapArmy(hit.first); return@detectTapGestures }
                         val w = camera.toWorld(o)
                         var p = sim.world.hit(w.x, w.y)

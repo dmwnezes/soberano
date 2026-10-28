@@ -265,11 +265,12 @@ private fun NationDetail(c: GameController, n: Nation) {
             }
         }
         if (confirmWar) {
-            val allies = g.nations.filter { it.alive && it.id != n.id && it.id != me && (sim.allied(it.id, n.id) || sim.hasTreaty(TreatyType.GUARANTEE, it.id, n.id)) && !sim.allied(it.id, me) }
+            val resp = remember(n.id) { sim.diplomacy.allyResponse(me, n.id) }
+            val guards = g.treaties.filter { it.type == TreatyType.GUARANTEE && it.b == n.id && it.a != me && it.a !in resp.fight }.map { it.a }
             Overlay({ confirmWar = false }) {
                 Text("Guerra contra ${n.name}?", style = Type.title.copy(fontSize = 22.sp), color = Ink.text)
                 Spacer(Modifier.height(8.dp))
-                Text(if (allies.isEmpty()) "Ninguém deve entrar na guerra por eles." else "Podem entrar por eles: ${allies.take(6).joinToString { it.name }}${if (allies.size > 6) " e mais ${allies.size - 6}" else ""}.", style = Type.body, color = Ink.muted)
+                Text(allyText(c, com.dmwnezes.soberano.sim.Diplomacy.AllyResponse(resp.fight + guards, resp.aid, resp.sanction)), style = Type.body, color = Ink.muted)
                 Spacer(Modifier.height(16.dp))
                 Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                     Btn("Cancelar", Modifier.weight(1f), BtnKind.GHOST) { confirmWar = false }

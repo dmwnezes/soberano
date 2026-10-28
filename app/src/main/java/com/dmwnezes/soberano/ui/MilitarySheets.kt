@@ -316,6 +316,7 @@ private fun MilAuto(c: GameController) {
                 }
                 Spacer(Modifier.height(8.dp))
                 Meter(have / cap * 100, Modifier.fillMaxWidth(), if (have >= cap) Ink.amber else Ink.verdigris)
+                if (sim.dev.capByBudget(me.id)) Text("O teto vem do orçamento de defesa: aumente a verba para ter mais tropas.", style = Type.small, color = Ink.faint, modifier = Modifier.padding(top = 4.dp))
                 Spacer(Modifier.height(10.dp))
                 val rp = g.rallyPoint.takeIf { it >= 0 && g.controller[it] == me.id }
                 Text(if (rp == null) "Treinam em todos os seus estados ao mesmo tempo" else "Chegam em: ${sim.world.provinces[rp].name} (ponto de reunião)", style = Type.label, color = Ink.text)

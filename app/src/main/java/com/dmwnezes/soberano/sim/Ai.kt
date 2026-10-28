@@ -35,12 +35,14 @@ class Ai(private val sim: Sim) {
         val spot = mine.minBy { p -> sample.minOf { world.distanceKm(p, it) } }
         var budget = max(0.0, n.militaryFund) * 0.7
         var guard = 0
-        while (budget > 0 && guard++ < 30 && n.queue.size < 40) {
+        // o piloto automático do jogador não tem teto; o computador respeita o teto de tropas
+        var room = if (n.id == game.player) Float.MAX_VALUE else sim.dev.manpowerCap(n.id) - sim.dev.landDivisions(n.id) - n.queue.size
+        while (budget > 0 && guard++ < 30 && n.queue.size < 40 && room >= 1f) {
             val roll = sim.randf()
             val type = when { roll < 0.5f -> UnitType.INFANTRY; roll < 0.75f -> UnitType.ARMOR; roll < 0.9f -> UnitType.ARTILLERY; else -> UnitType.ANTIAIR }
             val cost = sim.military.unitCost(n, type)
             if (cost > budget) { if (type == UnitType.INFANTRY) break else continue }
-            if (sim.military.buy(n, type, spot) == null) budget -= cost else break
+            if (sim.military.buy(n, type, spot) == null) { budget -= cost; room -= 1f } else break
         }
     }
 
@@ -130,9 +132,14 @@ class Ai(private val sim: Sim) {
         val navy = sim.armiesOf(n.id).filter { it.domain == Domain.SEA }.sumOf { it.value() }
         val air = sim.armiesOf(n.id).filter { it.domain == Domain.AIR }.sumOf { it.value() }
         var guard = 0
+        // no teto de tropas terrestres: só compra navios e aviões
+        var landRoom = sim.dev.manpowerCap(n.id) - sim.dev.landDivisions(n.id) - n.queue.count { it.type.domain == Domain.LAND }
         while (budget > 0 && guard++ < 40 && n.queue.size < 60) {
             val roll = sim.randf()
+            val landFull = landRoom < 1f
             val type = when {
+                landFull && coastal.isNotEmpty() && roll < 0.5f -> if (sim.randf() < 0.7f) UnitType.DESTROYER else UnitType.SUBMARINE
+                landFull -> if (sim.randf() < 0.6f) UnitType.FIGHTER else UnitType.DRONE
                 coastal.isNotEmpty() && navy < current * 0.2 && roll < 0.15f -> if (sim.randf() < 0.7f) UnitType.DESTROYER else UnitType.SUBMARINE
                 air < current * 0.2 && roll < 0.3f -> if (sim.randf() < 0.6f) UnitType.FIGHTER else UnitType.DRONE
                 roll < 0.6f -> UnitType.INFANTRY
@@ -143,7 +150,7 @@ class Ai(private val sim: Sim) {
             val cost = sim.military.unitCost(n, type)
             if (cost > budget) { if (type == UnitType.INFANTRY) break else continue }
             val where = if (type.domain == Domain.SEA) coastal.first() else spot
-            if (sim.military.buy(n, type, where) == null) budget -= cost else break
+            if (sim.military.buy(n, type, where) == null) { budget -= cost; if (type.domain == Domain.LAND) landRoom -= 1f } else break
         }
         // junta exércitos parados no mesmo lugar
         for (a in sim.armiesOf(n.id)) if (game.armies.contains(a) && !a.moving && !a.battle && a.divisions() < 30f) {
@@ -183,13 +190,16 @@ class Ai(private val sim: Sim) {
 
     private fun diplomacy(n: Nation) {
         val candidates = (neighborsOf(n.id) + List(3) { sim.randInt(game.n) }).filter { it != n.id && game.nations[it].alive }
+        // limite de acordos por país: sem isso a lista crescia sem parar e deixava o jogo lento com o tempo
+        val tradeFull = sim.economy.tradeCount(n.id) >= 14
+        val napFull = game.treaties.count { it.type == TreatyType.NON_AGGRESSION && (it.a == n.id || it.b == n.id) } >= 10
         for (c in candidates.shuffledBy()) {
             if (sim.atWar(n.id, c)) continue
             val r = game.rel(n.id, c)
             val type = when {
                 r >= 55f && !sim.hasTreaty(TreatyType.ALLIANCE, n.id, c) && sim.randf() < 0.15f -> TreatyType.ALLIANCE
-                r >= 15f && !sim.hasTreaty(TreatyType.TRADE, n.id, c) -> TreatyType.TRADE
-                r in 0f..30f && !sim.hasTreaty(TreatyType.NON_AGGRESSION, n.id, c) && sim.randf() < 0.3f -> TreatyType.NON_AGGRESSION
+                r >= 15f && !tradeFull && !sim.hasTreaty(TreatyType.TRADE, n.id, c) -> TreatyType.TRADE
+                r in 0f..30f && !napFull && !sim.hasTreaty(TreatyType.NON_AGGRESSION, n.id, c) && sim.randf() < 0.3f -> TreatyType.NON_AGGRESSION
                 else -> null
             } ?: continue
             if (sim.randf() > 0.35f * n.personality.trade) continue

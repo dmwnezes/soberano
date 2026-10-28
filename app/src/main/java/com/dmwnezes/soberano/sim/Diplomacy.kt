@@ -226,10 +226,24 @@ class Diplomacy(private val sim: Sim) {
         game.treatyCache = null
         val attackers = mutableListOf(attacker)
         val defenders = mutableListOf(target)
-        // aliados do alvo entram (blocos militares e alianças)
-        for (o in game.nations) if (o.alive && o.id != attacker && o.id != target) {
-            if (sim.allied(o.id, target) && !sim.allied(o.id, attacker) && game.rel(o.id, target) > 20f) defenders += o.id
+        // aliados do alvo: poucos lutam, a maioria manda ajuda e alguns só sancionam
+        val resp = allyResponse(attacker, target)
+        defenders += resp.fight
+        if (game.player in resp.fight) sim.feed("shield", "Você entrou na guerra para defender ${sim.nation(target).name}", 3)
+        for (o in resp.aid) {
+            val amount = min(5.0, game.natGdp(o) * 0.003)
+            val donor = sim.nation(o)
+            donor.treasury -= amount
+            if (donor.treasury < 0) { donor.debt -= donor.treasury; donor.treasury = 0.0 }
+            sim.nation(target).militaryFund += amount
+            game.addRel(o, attacker, -10f)
         }
+        for (o in resp.sanction) if (game.treaties.none { it.type == TreatyType.SANCTION && it.a == o && it.b == attacker }) {
+            game.treaties += Treaty(TreatyType.SANCTION, o, attacker, game.day, game.day + 365 * 2)
+            game.addRel(o, attacker, -15f)
+        }
+        if (attacker == game.player && (resp.aid.isNotEmpty() || resp.sanction.isNotEmpty()))
+            sim.feed("bloc", "Aliados deles: ${resp.aid.size} mandaram ajuda, ${resp.sanction.size} sancionaram você", 2)
         // quem garantiu a independência do alvo entra também
         for (t in game.treaties) if (t.type == TreatyType.GUARANTEE && t.b == target && t.a != attacker && t.a !in defenders &&
             sim.nation(t.a).alive && !sim.allied(t.a, attacker)) {
@@ -250,6 +264,30 @@ class Diplomacy(private val sim: Sim) {
             (if (defenders.size > 1) " (+${defenders.size - 1} aliados)" else ""), tone, sim.nation(target).capital)
         sim.touch()
         return w
+    }
+
+    class AllyResponse(val fight: List<Int>, val aid: List<Int>, val sanction: List<Int>)
+
+    /**
+     * Como os aliados do alvo reagem a um ataque. Lutam só os mais próximos (até 2) e um protetor forte
+     * que goste muito do alvo; os outros mandam dinheiro ou sancionam o agressor. Sem sorteio: a prévia bate com o resultado.
+     */
+    fun allyResponse(attacker: Int, target: Int): AllyResponse {
+        val allies = game.nations.filter { o ->
+            o.alive && o.id != attacker && o.id != target && sim.allied(o.id, target) && !sim.allied(o.id, attacker) && game.rel(o.id, target) > 20f
+        }
+        val tc = sim.nation(target).capital
+        val near = sim.ai.neighborsOf(target) + sim.ai.neighborsOf(attacker)
+        fun km(o: Int) = sim.world.distanceKm(sim.nation(o).capital, tc)
+        val fight = allies.filter { it.id in near || km(it.id) < 1500 }.sortedBy { km(it.id) }.take(2).map { it.id }.toMutableList()
+        allies.filter { it.id !in fight && game.rel(it.id, target) > 60f }.maxByOrNull { sim.landPower(it.id) }?.let { fight += it.id }
+        // quem garantiu a independência do alvo sempre luta
+        for (t in game.treaties) if (t.type == TreatyType.GUARANTEE && t.b == target && t.a != attacker && t.a !in fight &&
+            sim.nation(t.a).alive && !sim.allied(t.a, attacker)) fight += t.a
+        val rest = allies.filter { it.id !in fight }
+        val sanction = rest.filter { game.rel(it.id, attacker) < 0f }.map { it.id }
+        val aid = rest.filter { it.id !in sanction }.map { it.id }
+        return AllyResponse(fight, aid, sanction)
     }
 
     /** O lado de [from] propõe paz a quem lidera o outro lado. */

@@ -397,7 +397,38 @@ class Development(private val sim: Sim) {
     // ============================================================ reservistas automáticos
 
     /** Teto de divisões terrestres sustentadas pela população. */
-    fun manpowerCap(n: Int): Float = (sqrt(game.natPop(n) / 1e6) * 10.0).toFloat().coerceAtLeast(4f) * (if (sim.nation(n).mobilized) 1.5f else 1f)
+    fun manpowerCap(n: Int): Float {
+        val nat = sim.nation(n)
+        val pop = (sqrt(game.natPop(n) / 1e6) * 10.0).toFloat()
+        // orçamento com retorno decrescente: dobrar a verba não dobra o exército (segura EUA e China)
+        val budget = (sqrt(game.natGdp(n) * nat.shares[Area.DEFENSE.ordinal]) * 8.0).toFloat()
+        return min(pop, budget).coerceAtLeast(4f) * (if (nat.mobilized) 1.5f else 1f)
+    }
+
+    /** Parte do teto que vem do orçamento (para explicar na interface). */
+    fun capByBudget(n: Int): Boolean {
+        val pop = (sqrt(game.natPop(n) / 1e6) * 10.0).toFloat()
+        val budget = (sqrt(game.natGdp(n) * sim.nation(n).shares[Area.DEFENSE.ordinal]) * 8.0).toFloat()
+        return budget < pop
+    }
+
+    /** Computador em paz acima do teto: dispensa aos poucos o excesso (antes EUA e China cresciam sem parar). */
+    private fun trimExcess(n: Nation) {
+        if (n.id == game.player) return
+        val cap = manpowerCap(n.id)
+        // em guerra só corta o que passa muito do teto (ex.: fim da mobilização)
+        var cut = (landDivisions(n.id) - cap * (if (sim.atWarAny(n.id)) 1.25f else 1.1f)) * 0.08f
+        if (cut < 0.5f) return
+        for (a in sim.armiesOf(n.id).filter { it.domain == Domain.LAND && !it.battle }.sortedByDescending { it.divisions() }) {
+            for (t in listOf(UnitType.INFANTRY, UnitType.ARMOR, UnitType.ARTILLERY, UnitType.ANTIAIR)) {
+                val take = min(cut, a.units[t.ordinal])
+                a.units[t.ordinal] -= take; cut -= take
+                if (cut <= 0f) break
+            }
+            if (cut <= 0f) break
+        }
+        game.armies.removeAll { it.owner == n.id && !it.alive() }
+    }
 
     /** Divisões novas por mês que os estados do país treinam sozinhos. */
     fun recruitRate(n: Nation): Float {
@@ -423,7 +454,8 @@ class Development(private val sim: Sim) {
         if (spots.isEmpty()) return
         if (n.id != game.player || spots.size == 1) {
             // computador (ou ponto de reunião): reserva nacional, divisões inteiras repartidas entre os pontos
-            n.reserves += monthRate
+            // reserva parada no teto não acumula (antes virava uma enxurrada de tropas na mobilização)
+            n.reserves = min(n.reserves + monthRate, max(2f, monthRate * 2f))
             val count = min(n.reserves.toInt(), room.toInt())
             if (count < 1) return
             n.reserves -= count
@@ -531,6 +563,7 @@ class Development(private val sim: Sim) {
         monthlyTrade(n)
         monthlyProjects(n)
         monthlyRecruits(n)
+        trimExcess(n)
     }
 
     fun monthly() {
