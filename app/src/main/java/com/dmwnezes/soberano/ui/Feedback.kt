@@ -6,7 +6,7 @@ import android.media.AudioFormat
 import android.media.AudioTrack
 import android.os.Build
 import android.os.Handler
-import android.os.Looper
+import android.os.HandlerThread
 import android.os.VibrationEffect
 import android.os.Vibrator
 import android.os.VibratorManager
@@ -23,9 +23,15 @@ enum class Sfx { WAR, BATTLE, VICTORY, DEFEAT, CAPTURE, EVENT, BUILD, NUKE, VOTE
 class Feedback(context: Context) {
     private val ctx = context.applicationContext
     private val prefs = ctx.getSharedPreferences("soberano", Context.MODE_PRIVATE)
-    private val handler = Handler(Looper.getMainLooper())
+    // criar AudioTrack e vibrar são chamadas ao sistema (dezenas de ms): na thread da tela travavam o mapa durante as guerras
+    private val handler get() = worker
     private var lastPlay = 0L
     private val cache = HashMap<Sfx, ShortArray>()
+
+    companion object {
+        /** uma thread só para todas as partidas */
+        private val worker by lazy { Handler(HandlerThread("sfx").apply { start() }.looper) }
+    }
 
     var sound: Boolean
         get() = prefs.getBoolean("sound", true)
@@ -43,8 +49,11 @@ class Feedback(context: Context) {
         val now = System.currentTimeMillis()
         if (now - lastPlay < 350) return
         lastPlay = now
-        if (sound) runCatching { playPcm(cache.getOrPut(s) { Synth.make(s) }) }
-        if (vibration) runCatching { vibrate(s) }
+        val snd = sound; val vib = vibration
+        handler.post {
+            if (snd) runCatching { playPcm(cache.getOrPut(s) { Synth.make(s) }) }
+            if (vib) runCatching { vibrate(s) }
+        }
     }
 
     private fun playPcm(pcm: ShortArray) {
